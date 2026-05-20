@@ -1,0 +1,12 @@
+{
+  "web": {
+    "client_id": "your-client-id.apps.googleusercontent.com",
+    "project_id": "your-project-id",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "client_secret": "your-client-secret",
+    "redirect_uris": [
+      "http://localhost:8080/api/v1/storages/google-drive/callback"
+    ]
+  }
+}

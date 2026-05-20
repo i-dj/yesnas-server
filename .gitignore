@@ -1,0 +1,7 @@
+._*
+.DS_Store
+oauth/*.json
+data/nas.db
+data/nas.db-wal
+data/nas.db-shm
+oauth/rclone.conf
