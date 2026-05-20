@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -9,13 +10,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -102,6 +106,35 @@ type googleDriveFileListResponse struct {
 type googleDriveFile struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+type CloudUsage struct {
+	TotalBytes int64
+	UsedBytes  int64
+	FreeBytes  int64
+}
+
+type CloudBenchmarkProgress struct {
+	Stage                   string
+	TotalBytes              int64
+	CompletedBytes          int64
+	CurrentSpeedBytesPerSec float64
+	StartedAt               time.Time
+}
+
+type CloudBenchmarkResult struct {
+	RemotePath            string
+	SizeBytes             int64
+	WriteSpeedBytesPerSec float64
+	ReadSpeedBytesPerSec  float64
+}
+
+type rcloneAboutResponse struct {
+	Total   int64 `json:"total"`
+	Used    int64 `json:"used"`
+	Free    int64 `json:"free"`
+	Trashed int64 `json:"trashed"`
+	Other   int64 `json:"other"`
 }
 
 type googleOAuthClientFile struct {
@@ -487,6 +520,368 @@ func BackfillGoogleDriveAccountEmail(ctx context.Context, item *Storage) {
 
 	item.Username = email
 	_ = UpdateIdentity(item.ID, email)
+}
+
+func RefreshGoogleDriveUsage(ctx context.Context, item *Storage) (*CloudUsage, error) {
+	if item == nil || item.Provider != string(ProviderGoogleDrive) {
+		return nil, fmt.Errorf("google drive storage is required")
+	}
+	remote := googleDriveRemoteName(item.ID) + ":"
+	result, err := commandrunner.RunWithOptions(
+		ctx,
+		commandrunner.Options{},
+		"rclone",
+		"about",
+		remote,
+		"--json",
+		"--config", defaultGoogleDriveRcloneFilePath,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("rclone about google drive: %w", err)
+	}
+	var about rcloneAboutResponse
+	if err := json.Unmarshal([]byte(result.Stdout), &about); err != nil {
+		return nil, fmt.Errorf("decode rclone about google drive: %w", err)
+	}
+	usage := &CloudUsage{
+		TotalBytes: about.Total,
+		UsedBytes:  about.Used,
+		FreeBytes:  about.Free,
+	}
+	if usage.TotalBytes <= 0 && usage.UsedBytes > 0 && usage.FreeBytes > 0 {
+		usage.TotalBytes = usage.UsedBytes + usage.FreeBytes
+	}
+	if usage.FreeBytes <= 0 && usage.TotalBytes > usage.UsedBytes {
+		usage.FreeBytes = usage.TotalBytes - usage.UsedBytes
+	}
+	item.TotalSize = usage.TotalBytes
+	item.FreeSize = usage.FreeBytes
+	if err := UpdateRuntime(item.ID, item.MountPath, item.Status, usage.TotalBytes, usage.FreeBytes, item.ExtraConfig); err != nil {
+		return usage, fmt.Errorf("update google drive usage: %w", err)
+	}
+	return usage, nil
+}
+
+func BenchmarkGoogleDrive(ctx context.Context, item *Storage, sizeBytes int64, emit func(CloudBenchmarkProgress) bool) (*CloudBenchmarkResult, error) {
+	if item == nil || item.Provider != string(ProviderGoogleDrive) {
+		return nil, fmt.Errorf("google drive storage is required")
+	}
+	if sizeBytes <= 0 {
+		return nil, fmt.Errorf("benchmark size must be greater than 0")
+	}
+	token, err := GetTokenByStorageID(item.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load google drive token: %w", err)
+	}
+	if token == nil || strings.TrimSpace(token.AccessToken) == "" {
+		return nil, fmt.Errorf("google drive token is missing")
+	}
+	if err := upsertGoogleDriveRcloneConfig(*item, *token); err != nil {
+		return nil, fmt.Errorf("write google drive rclone config: %w", err)
+	}
+
+	localFile, err := os.CreateTemp("", "yesnas-cloud-benchmark-*.tmp")
+	if err != nil {
+		return nil, fmt.Errorf("create local benchmark file: %w", err)
+	}
+	localPath := localFile.Name()
+	if err := localFile.Close(); err != nil {
+		_ = os.Remove(localPath)
+		return nil, fmt.Errorf("close local benchmark file: %w", err)
+	}
+	defer os.Remove(localPath)
+
+	if err := writeGoogleDriveBenchmarkFile(ctx, localPath, sizeBytes); err != nil {
+		return nil, err
+	}
+
+	downloadFile, err := os.CreateTemp("", "yesnas-cloud-benchmark-download-*.tmp")
+	if err != nil {
+		return nil, fmt.Errorf("create local download file: %w", err)
+	}
+	downloadPath := downloadFile.Name()
+	_ = downloadFile.Close()
+	defer os.Remove(downloadPath)
+
+	remotePath := ".yesnas-benchmark-" + idgen.New() + ".tmp"
+	remote := googleDriveRemoteName(item.ID) + ":" + remotePath
+	defer func() {
+		_, _ = commandrunner.RunWithOptions(context.Background(), commandrunner.Options{}, "rclone", "deletefile", remote, "--config", defaultGoogleDriveRcloneFilePath)
+	}()
+
+	writeSpeed, err := runRcloneTransfer(ctx, "write", sizeBytes, emit, "copyto", localPath, remote, "--config", defaultGoogleDriveRcloneFilePath, "--stats", "5s", "--stats-one-line", "--stats-log-level", "NOTICE")
+	if err != nil {
+		return nil, fmt.Errorf("upload benchmark file: %w", err)
+	}
+	readSpeed, err := runRcloneTransfer(ctx, "read", sizeBytes, emit, "copyto", remote, downloadPath, "--config", defaultGoogleDriveRcloneFilePath, "--stats", "5s", "--stats-one-line", "--stats-log-level", "NOTICE")
+	if err != nil {
+		return nil, fmt.Errorf("download benchmark file: %w", err)
+	}
+
+	return &CloudBenchmarkResult{
+		RemotePath:            remote,
+		SizeBytes:             sizeBytes,
+		WriteSpeedBytesPerSec: writeSpeed,
+		ReadSpeedBytesPerSec:  readSpeed,
+	}, nil
+}
+
+func writeGoogleDriveBenchmarkFile(ctx context.Context, path string, sizeBytes int64) error {
+	const chunkSize int64 = 8 * 1024 * 1024
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("open local benchmark file: %w", err)
+	}
+	defer file.Close()
+
+	chunk := make([]byte, chunkSize)
+	remaining := sizeBytes
+	for remaining > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		writeSize := int64(len(chunk))
+		if remaining < writeSize {
+			writeSize = remaining
+		}
+		if _, err := file.Write(chunk[:writeSize]); err != nil {
+			return fmt.Errorf("write local benchmark file: %w", err)
+		}
+		remaining -= writeSize
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync local benchmark file: %w", err)
+	}
+	return nil
+}
+
+func runRcloneTransfer(ctx context.Context, stage string, sizeBytes int64, emit func(CloudBenchmarkProgress) bool, args ...string) (float64, error) {
+	startedAt := time.Now()
+	if emit != nil && !emit(CloudBenchmarkProgress{Stage: stage, TotalBytes: sizeBytes, CompletedBytes: 0, StartedAt: startedAt}) {
+		return 0, context.Canceled
+	}
+
+	rclonePath, err := exec.LookPath("rclone")
+	if err != nil {
+		rclonePath = "/usr/bin/rclone"
+	}
+	cmd := exec.CommandContext(ctx, rclonePath, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return 0, fmt.Errorf("open rclone stdout: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return 0, fmt.Errorf("open rclone stderr: %w", err)
+	}
+
+	progressCh := make(chan rcloneTransferProgress, 16)
+	if err := cmd.Start(); err != nil {
+		return 0, fmt.Errorf("start rclone: %w", err)
+	}
+
+	var readers sync.WaitGroup
+	readOutput := func(name string, reader io.Reader) {
+		defer readers.Done()
+		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 1024), 1024*1024)
+		scanner.Split(splitRcloneLogLine)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			log.Printf("[RCLONE %s %s] %s", stage, name, line)
+			if progress, ok := parseRcloneTransferProgress(line, sizeBytes); ok {
+				select {
+				case progressCh <- progress:
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+		}
+		if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("[RCLONE %s %s] read output: %v", stage, name, err)
+		}
+	}
+	readers.Add(2)
+	go readOutput("stdout", stdout)
+	go readOutput("stderr", stderr)
+
+	done := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		readers.Wait()
+		done <- err
+	}()
+
+	lastProgress := rcloneTransferProgress{}
+	lastEmitAt := startedAt
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case progress := <-progressCh:
+			if progress.CompletedBytes > lastProgress.CompletedBytes {
+				lastProgress.CompletedBytes = progress.CompletedBytes
+			}
+			if progress.SpeedBytesPerSec > 0 {
+				lastProgress.SpeedBytesPerSec = progress.SpeedBytesPerSec
+			}
+			if time.Since(lastEmitAt) >= time.Second {
+				if !emitRcloneTransferProgress(stage, sizeBytes, lastProgress, startedAt, emit) {
+					return 0, context.Canceled
+				}
+				lastEmitAt = time.Now()
+			}
+		case err := <-done:
+			if err != nil {
+				return 0, err
+			}
+			elapsed := time.Since(startedAt).Seconds()
+			speed := lastProgress.SpeedBytesPerSec
+			if speed <= 0 && elapsed > 0 {
+				speed = float64(sizeBytes) / elapsed
+			}
+			if emit != nil && !emit(CloudBenchmarkProgress{Stage: stage, TotalBytes: sizeBytes, CompletedBytes: sizeBytes, CurrentSpeedBytesPerSec: speed, StartedAt: startedAt}) {
+				return 0, context.Canceled
+			}
+			return speed, nil
+		case <-ticker.C:
+			if !emitRcloneTransferProgress(stage, sizeBytes, lastProgress, startedAt, emit) {
+				return 0, context.Canceled
+			}
+			lastEmitAt = time.Now()
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+}
+
+type rcloneTransferProgress struct {
+	CompletedBytes   int64
+	SpeedBytesPerSec float64
+}
+
+func emitRcloneTransferProgress(stage string, totalBytes int64, progress rcloneTransferProgress, startedAt time.Time, emit func(CloudBenchmarkProgress) bool) bool {
+	if emit == nil {
+		return true
+	}
+	completedBytes := progress.CompletedBytes
+	if completedBytes < 0 {
+		completedBytes = 0
+	}
+	if totalBytes > 0 && completedBytes > totalBytes {
+		completedBytes = totalBytes
+	}
+	elapsed := time.Since(startedAt).Seconds()
+	speed := progress.SpeedBytesPerSec
+	if speed <= 0 && elapsed > 0 && completedBytes > 0 {
+		speed = float64(completedBytes) / elapsed
+	}
+	return emit(CloudBenchmarkProgress{
+		Stage:                   stage,
+		TotalBytes:              totalBytes,
+		CompletedBytes:          completedBytes,
+		CurrentSpeedBytesPerSec: speed,
+		StartedAt:               startedAt,
+	})
+}
+
+func splitRcloneLogLine(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	for i, b := range data {
+		if b == '\n' || b == '\r' {
+			return i + 1, data[:i], nil
+		}
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+func parseRcloneTransferProgress(line string, totalBytes int64) (rcloneTransferProgress, bool) {
+	index := strings.Index(line, "Transferred:")
+	if index >= 0 {
+		line = strings.TrimSpace(line[index+len("Transferred:"):])
+	} else if index := strings.Index(line, "NOTICE:"); index >= 0 {
+		line = strings.TrimSpace(line[index+len("NOTICE:"):])
+	} else {
+		return rcloneTransferProgress{}, false
+	}
+	parts := strings.Split(line, ",")
+	completedPart := strings.TrimSpace(parts[0])
+	if slash := strings.Index(completedPart, "/"); slash >= 0 {
+		completedPart = strings.TrimSpace(completedPart[:slash])
+	}
+	fields := strings.Fields(strings.ReplaceAll(completedPart, ",", ""))
+	if len(fields) < 2 {
+		return rcloneTransferProgress{}, false
+	}
+	amount, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return rcloneTransferProgress{}, false
+	}
+	completed := int64(amount * rcloneSizeUnitMultiplier(fields[1]))
+	if completed < 0 {
+		completed = 0
+	}
+	if totalBytes > 0 && completed > totalBytes {
+		completed = totalBytes
+	}
+	return rcloneTransferProgress{
+		CompletedBytes:   completed,
+		SpeedBytesPerSec: parseRcloneSpeedBytesPerSec(parts),
+	}, true
+}
+
+func parseRcloneSpeedBytesPerSec(parts []string) float64 {
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if !strings.HasSuffix(strings.ToLower(part), "/s") {
+			continue
+		}
+		part = strings.TrimSuffix(part, "/s")
+		part = strings.TrimSuffix(part, "/S")
+		fields := strings.Fields(strings.ReplaceAll(part, ",", ""))
+		if len(fields) < 2 {
+			continue
+		}
+		amount, err := strconv.ParseFloat(fields[0], 64)
+		if err != nil {
+			continue
+		}
+		return amount * rcloneSizeUnitMultiplier(fields[1])
+	}
+	return 0
+}
+
+func rcloneSizeUnitMultiplier(unit string) float64 {
+	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case "b", "byte", "bytes":
+		return 1
+	case "kb", "kbyte", "kbytes":
+		return 1000
+	case "mb", "mbyte", "mbytes":
+		return 1000 * 1000
+	case "gb", "gbyte", "gbytes":
+		return 1000 * 1000 * 1000
+	case "tb", "tbyte", "tbytes":
+		return 1000 * 1000 * 1000 * 1000
+	case "kib", "kibyte", "kibytes":
+		return 1024
+	case "mib", "mibyte", "mibytes":
+		return 1024 * 1024
+	case "gib", "gibyte", "gibytes":
+		return 1024 * 1024 * 1024
+	case "tib", "tibyte", "tibytes":
+		return 1024 * 1024 * 1024 * 1024
+	default:
+		return 1
+	}
 }
 
 func UploadGoogleDriveReader(ctx context.Context, item *Storage, targetPath string, source io.Reader, contentType string) error {

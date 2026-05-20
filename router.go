@@ -80,10 +80,6 @@ func newRouter() http.Handler {
 	mux.HandleFunc("HEAD /api/v1/uploads/tus/{uploadId}", filesHandler.HandleTusHead)
 	mux.HandleFunc("PATCH /api/v1/uploads/tus/{uploadId}", filesHandler.HandleTusPatch)
 	mux.HandleFunc("DELETE /api/v1/uploads/tus/{uploadId}", filesHandler.HandleTusDelete)
-	mux.HandleFunc("POST /api/v1/upload2", handleUpload2Create)
-	mux.HandleFunc("HEAD /api/v1/upload2/{uploadId}", handleUpload2Head)
-	mux.HandleFunc("PATCH /api/v1/upload2/{uploadId}", handleUpload2Patch)
-	mux.HandleFunc("DELETE /api/v1/upload2/{uploadId}", handleUpload2Delete)
 	mux.HandleFunc("GET /api/v1/jobs", jobsHandler.HandleList)
 	mux.HandleFunc("GET /api/v1/jobs/{jobId}", jobsHandler.HandleGet)
 

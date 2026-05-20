@@ -175,6 +175,36 @@ func DeleteByID(poolID string) error {
 	return err
 }
 
+func UpsertCloudPoolRecord(pool StoragePool) error {
+	if pool.ID == "" {
+		return fmt.Errorf("storage pool id is required")
+	}
+	now := time.Now()
+	_, err := database.DB.Exec(
+		`INSERT INTO storage_pool (id, storage_id, name, filesystem, raid_level, mount_path, data_path, cache_mode, read_speed_bytes_per_sec, write_speed_bytes_per_sec, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+			storage_id = excluded.storage_id,
+			name = excluded.name,
+			filesystem = excluded.filesystem,
+			raid_level = excluded.raid_level,
+			mount_path = excluded.mount_path,
+			data_path = excluded.data_path,
+			cache_mode = excluded.cache_mode,
+			updated_at = excluded.updated_at`,
+		pool.ID,
+		pool.StorageID,
+		pool.Name,
+		pool.Filesystem,
+		pool.RaidLevel,
+		pool.MountPath,
+		pool.DataPath,
+		pool.CacheMode,
+		now,
+	)
+	return err
+}
+
 func UpdateBenchmarkResult(poolID string, readSpeedBytesPerSec float64, writeSpeedBytesPerSec float64, testedAt time.Time) error {
 	_, err := database.DB.Exec(
 		`UPDATE storage_pool SET read_speed_bytes_per_sec = ?, write_speed_bytes_per_sec = ?, speed_tested_at = ?, updated_at = ? WHERE id = ?`,

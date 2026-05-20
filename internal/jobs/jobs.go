@@ -14,6 +14,7 @@ import (
 
 	"nas-server/database"
 	"nas-server/internal/storage"
+	"nas-server/internal/storagepool"
 	"nas-server/pkg/httpx"
 	"nas-server/pkg/idgen"
 )
@@ -34,25 +35,28 @@ const (
 	StatusCancelled Status = "cancelled"
 )
 
-const workerInterval = 2 * time.Second
+const (
+	workerInterval       = 2 * time.Second
+	jobHeartbeatInterval = 15 * time.Second
+)
 
 type Job struct {
-	ID           string  `db:"id" json:"id"`
-	Type         string  `db:"type" json:"type"`
-	Status       string  `db:"status" json:"status"`
-	Title        string  `db:"title" json:"title"`
-	StorageID    string  `db:"storage_id" json:"storageId"`
-	ResourceType string  `db:"resource_type" json:"resourceType"`
-	ResourceID   string  `db:"resource_id" json:"resourceId"`
-	Progress     int     `db:"progress" json:"progress"`
-	Message      string  `db:"message" json:"message"`
-	ErrorMessage string  `db:"error_message" json:"errorMessage"`
-	PayloadJSON  string  `db:"payload_json" json:"-"`
-	ResultJSON   string  `db:"result_json" json:"-"`
-	CreatedAt    string  `db:"created_at" json:"createdAt"`
-	UpdatedAt    string  `db:"updated_at" json:"updatedAt"`
-	StartedAt    *string `db:"started_at" json:"startedAt,omitempty"`
-	FinishedAt   *string `db:"finished_at" json:"finishedAt,omitempty"`
+	ID            string  `db:"id" json:"id"`
+	Type          string  `db:"type" json:"type"`
+	Status        string  `db:"status" json:"status"`
+	Title         string  `db:"title" json:"-"`
+	StoragePoolID string  `db:"storage_id" json:"storagePoolId"`
+	ResourceType  string  `db:"resource_type" json:"resourceType"`
+	ResourceID    string  `db:"resource_id" json:"resourceId"`
+	Progress      int     `db:"progress" json:"progress"`
+	Message       string  `db:"message" json:"message"`
+	ErrorMessage  string  `db:"error_message" json:"errorMessage"`
+	PayloadJSON   string  `db:"payload_json" json:"-"`
+	ResultJSON    string  `db:"result_json" json:"-"`
+	CreatedAt     string  `db:"created_at" json:"createdAt"`
+	UpdatedAt     string  `db:"updated_at" json:"updatedAt"`
+	StartedAt     *string `db:"started_at" json:"startedAt,omitempty"`
+	FinishedAt    *string `db:"finished_at" json:"finishedAt,omitempty"`
 }
 
 type CloudSyncPayload struct {
@@ -89,7 +93,7 @@ func StartWorker() {
 	})
 }
 
-func EnqueueCloudSync(storageID string, payload CloudSyncPayload) (*Job, error) {
+func EnqueueCloudSync(storagePoolID string, payload CloudSyncPayload) (*Job, error) {
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("编码同步任务失败: %w", err)
@@ -97,29 +101,29 @@ func EnqueueCloudSync(storageID string, payload CloudSyncPayload) (*Job, error) 
 
 	now := time.Now().Format(time.RFC3339)
 	item := &Job{
-		ID:           idgen.New(),
-		Type:         string(TypeCloudSync),
-		Status:       string(StatusPending),
-		Title:        "同步到 Google Drive",
-		StorageID:    storageID,
-		ResourceType: "file",
-		ResourceID:   payload.TargetPath,
-		Progress:     0,
-		Message:      "等待同步",
-		PayloadJSON:  string(payloadJSON),
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:            idgen.New(),
+		Type:          string(TypeCloudSync),
+		Status:        string(StatusPending),
+		Title:         "同步到 Google Drive",
+		StoragePoolID: storagePoolID,
+		ResourceType:  "file",
+		ResourceID:    payload.TargetPath,
+		Progress:      0,
+		Message:       "等待同步",
+		PayloadJSON:   string(payloadJSON),
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 
 	_, err = database.DB.Exec(
 		`INSERT INTO jobs (id, type, status, title, storage_id, resource_type, resource_id, progress, message, error_message, payload_json, result_json, created_at, updated_at, started_at, finished_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		item.ID, item.Type, item.Status, item.Title, item.StorageID, item.ResourceType, item.ResourceID, item.Progress, item.Message, item.ErrorMessage, item.PayloadJSON, item.ResultJSON, item.CreatedAt, item.UpdatedAt, item.StartedAt, item.FinishedAt,
+		item.ID, item.Type, item.Status, item.Title, item.StoragePoolID, item.ResourceType, item.ResourceID, item.Progress, item.Message, item.ErrorMessage, item.PayloadJSON, item.ResultJSON, item.CreatedAt, item.UpdatedAt, item.StartedAt, item.FinishedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("创建同步任务失败: %w", err)
 	}
-	log.Printf("[JOBS] enqueued id=%s type=%s storage=%s local=%s target=%s", item.ID, item.Type, storageID, payload.LocalPath, payload.TargetPath)
+	log.Printf("[JOBS] enqueued id=%s type=%s storagePool=%s local=%s target=%s", item.ID, item.Type, storagePoolID, payload.LocalPath, payload.TargetPath)
 	return item, nil
 }
 
@@ -169,7 +173,7 @@ func processOnePendingJob() {
 		return
 	}
 
-	log.Printf("[JOBS] claimed id=%s type=%s storage=%s resource=%s", item.ID, item.Type, item.StorageID, item.ResourceID)
+	log.Printf("[JOBS] claimed id=%s type=%s storagePool=%s resource=%s", item.ID, item.Type, item.StoragePoolID, item.ResourceID)
 
 	switch Type(item.Type) {
 	case TypeCloudSync:
@@ -214,12 +218,13 @@ func runCloudSyncJob(item *Job) {
 		_ = updateFailure(item.ID, "解析同步任务失败: "+err.Error())
 		return
 	}
-	log.Printf("[JOBS] cloud sync start id=%s storage=%s local=%s target=%s", item.ID, item.StorageID, payload.LocalPath, payload.TargetPath)
+	log.Printf("[JOBS] cloud sync start id=%s storagePool=%s local=%s target=%s", item.ID, item.StoragePoolID, payload.LocalPath, payload.TargetPath)
 
-	storageRecord, err := storage.Get(item.StorageID)
+	storageRecord, err := resolveCloudSyncStorage(item.StoragePoolID)
 	if err != nil || storageRecord == nil {
-		log.Printf("[JOBS] cloud sync storage missing id=%s storage=%s err=%v", item.ID, item.StorageID, err)
+		log.Printf("[JOBS] cloud sync storage missing id=%s storagePool=%s err=%v", item.ID, item.StoragePoolID, err)
 		_ = updateFailure(item.ID, "云存储不存在")
+		cleanupCloudSyncLocalPayload(item.ID, payload)
 		return
 	}
 
@@ -227,19 +232,24 @@ func runCloudSyncJob(item *Job) {
 	if err != nil {
 		log.Printf("[JOBS] cloud sync open local failed id=%s path=%s err=%v", item.ID, payload.LocalPath, err)
 		_ = updateFailure(item.ID, "打开本地缓存文件失败: "+err.Error())
+		cleanupCloudSyncLocalPayload(item.ID, payload)
 		return
 	}
 	defer file.Close()
 
 	_ = updateProgress(item.ID, 25, "正在上传到 Google Drive")
-	if err := storage.UploadGoogleDriveReader(context.Background(), storageRecord, payload.TargetPath, file, payload.ContentType); err != nil {
-		log.Printf("[JOBS] cloud sync upload failed id=%s storage=%s target=%s err=%v", item.ID, item.StorageID, payload.TargetPath, err)
+	stopHeartbeat := startJobHeartbeat(item.ID)
+	err = storage.UploadGoogleDriveReader(context.Background(), storageRecord, payload.TargetPath, file, payload.ContentType)
+	stopHeartbeat()
+	if err != nil {
+		log.Printf("[JOBS] cloud sync upload failed id=%s storagePool=%s target=%s err=%v", item.ID, item.StoragePoolID, payload.TargetPath, err)
 		_ = updateFailure(item.ID, "上传到 Google Drive 失败: "+err.Error())
+		_ = file.Close()
+		cleanupCloudSyncLocalPayload(item.ID, payload)
 		return
 	}
 
-	_ = os.Remove(payload.LocalPath)
-	_ = os.Remove(filepath.Dir(payload.LocalPath))
+	cleanupCloudSyncLocalPayload(item.ID, payload)
 	log.Printf("[JOBS] cloud sync success id=%s target=%s duration=%s", item.ID, payload.TargetPath, time.Since(startedAt))
 	_ = updateSuccess(item.ID, map[string]any{
 		"targetPath": payload.TargetPath,
@@ -247,8 +257,65 @@ func runCloudSyncJob(item *Job) {
 	})
 }
 
+func startJobHeartbeat(jobID string) func() {
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(jobHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := updateHeartbeat(jobID); err != nil {
+					log.Printf("[JOBS] heartbeat failed id=%s err=%v", jobID, err)
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() {
+		close(done)
+	}
+}
+
+func cleanupCloudSyncLocalPayload(jobID string, payload CloudSyncPayload) {
+	localPath := strings.TrimSpace(payload.LocalPath)
+	if localPath == "" {
+		return
+	}
+	if err := os.Remove(localPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("[JOBS] cloud sync cleanup local failed id=%s path=%s err=%v", jobID, localPath, err)
+	}
+	if err := os.Remove(filepath.Dir(localPath)); err != nil && !os.IsNotExist(err) {
+		log.Printf("[JOBS] cloud sync cleanup dir skipped id=%s dir=%s err=%v", jobID, filepath.Dir(localPath), err)
+	}
+}
+
+func resolveCloudSyncStorage(storagePoolID string) (*storage.Storage, error) {
+	id := strings.TrimSpace(storagePoolID)
+	if id == "" {
+		return nil, fmt.Errorf("storagePoolId is required")
+	}
+	if storageRecord, err := storage.Get(id); err == nil && storageRecord != nil {
+		return storageRecord, nil
+	}
+	pool, err := storagepool.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(pool.StorageID) == "" {
+		return nil, fmt.Errorf("storage pool has no storage id")
+	}
+	return storage.Get(strings.TrimSpace(pool.StorageID))
+}
+
 func updateProgress(jobID string, progress int, message string) error {
 	_, err := database.DB.Exec(`UPDATE jobs SET progress = ?, message = ?, updated_at = ? WHERE id = ?`, progress, message, time.Now().Format(time.RFC3339), jobID)
+	return err
+}
+
+func updateHeartbeat(jobID string) error {
+	_, err := database.DB.Exec(`UPDATE jobs SET updated_at = ? WHERE id = ? AND status = ?`, time.Now().Format(time.RFC3339), jobID, string(StatusRunning))
 	return err
 }
 

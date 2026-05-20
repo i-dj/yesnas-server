@@ -30,18 +30,18 @@ const (
 )
 
 type tusUploadMeta struct {
-	ID           string            `json:"id"`
-	StorageID    string            `json:"storageId"`
-	ParentID     string            `json:"parentId"`
-	RelativePath string            `json:"relativePath"`
-	FileName     string            `json:"fileName"`
-	FileType     string            `json:"fileType"`
-	TempDir      string            `json:"tempDir"`
-	UploadLength int64             `json:"uploadLength"`
-	Offset       int64             `json:"offset"`
-	CreatedAt    time.Time         `json:"createdAt"`
-	UpdatedAt    time.Time         `json:"updatedAt"`
-	RawMetadata  map[string]string `json:"rawMetadata"`
+	ID            string            `json:"id"`
+	StoragePoolID string            `json:"storagePoolId"`
+	ParentID      string            `json:"parentId"`
+	RelativePath  string            `json:"relativePath"`
+	FileName      string            `json:"fileName"`
+	FileType      string            `json:"fileType"`
+	TempDir       string            `json:"tempDir"`
+	UploadLength  int64             `json:"uploadLength"`
+	Offset        int64             `json:"offset"`
+	CreatedAt     time.Time         `json:"createdAt"`
+	UpdatedAt     time.Time         `json:"updatedAt"`
+	RawMetadata   map[string]string `json:"rawMetadata"`
 }
 
 type uploadPatchLock struct {
@@ -98,13 +98,12 @@ func (h *Handler) HandleTusCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	storageRecord, err := resolveUploadStorage(meta.StorageID)
+	storageRecord, err := resolveUploadStorage(meta.StoragePoolID)
 	if err != nil {
-		log.Printf("[UPLOAD][CREATE] storage resolve failed upload=%s storage=%s err=%v", meta.ID, meta.StorageID, err)
+		log.Printf("[UPLOAD][CREATE] storage resolve failed upload=%s storagePool=%s err=%v", meta.ID, meta.StoragePoolID, err)
 		http.Error(w, "storage not found", http.StatusNotFound)
 		return
 	}
-	meta.StorageID = storageRecord.ID
 	meta.TempDir = storageUploadRootPath(storageRecord)
 	if err := ensureUploadMetaRoot(); err != nil {
 		log.Printf("[UPLOAD] init meta dir failed root=%s err=%v", uploadMetaRootPath(), err)
@@ -132,7 +131,7 @@ func (h *Handler) HandleTusCreate(w http.ResponseWriter, r *http.Request) {
 	log.Printf(
 		"[UPLOAD] created id=%s storage=%s parentId=%s relativePath=%q fileName=%q size=%d temp=%s",
 		meta.ID,
-		meta.StorageID,
+		meta.StoragePoolID,
 		meta.ParentID,
 		meta.RelativePath,
 		meta.FileName,
@@ -385,24 +384,24 @@ func buildTusUploadMeta(length int64, raw map[string]string) (*tusUploadMeta, er
 	if fileName != filepath.Base(fileName) {
 		return nil, fmt.Errorf("invalid file name")
 	}
-	storageID := strings.TrimSpace(raw["storageId"])
-	if storageID == "" {
-		return nil, fmt.Errorf("storageId is required")
+	storagePoolID := strings.TrimSpace(raw["storagePoolId"])
+	if storagePoolID == "" {
+		return nil, fmt.Errorf("storagePoolId is required")
 	}
 
 	now := time.Now()
 	return &tusUploadMeta{
-		ID:           idgen.New(),
-		StorageID:    storageID,
-		ParentID:     strings.TrimSpace(raw["parentId"]),
-		RelativePath: strings.TrimSpace(raw["relativePath"]),
-		FileName:     fileName,
-		FileType:     strings.TrimSpace(firstNonEmpty(raw["filetype"], raw["type"])),
-		UploadLength: length,
-		Offset:       0,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		RawMetadata:  raw,
+		ID:            idgen.New(),
+		StoragePoolID: storagePoolID,
+		ParentID:      strings.TrimSpace(raw["parentId"]),
+		RelativePath:  strings.TrimSpace(raw["relativePath"]),
+		FileName:      fileName,
+		FileType:      strings.TrimSpace(firstNonEmpty(raw["filetype"], raw["type"])),
+		UploadLength:  length,
+		Offset:        0,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		RawMetadata:   raw,
 	}, nil
 }
 
@@ -484,18 +483,18 @@ func cloudUploadRootPath() string {
 	return defaultCloudUploadRoot
 }
 
-func resolveUploadStorage(id string) (*storage.Storage, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return nil, fmt.Errorf("storageId is required")
+func resolveUploadStorage(storagePoolID string) (*storage.Storage, error) {
+	storagePoolID = strings.TrimSpace(storagePoolID)
+	if storagePoolID == "" {
+		return nil, fmt.Errorf("storagePoolId is required")
 	}
 
-	record, err := storage.Get(id)
+	record, err := storage.Get(storagePoolID)
 	if err == nil && record != nil {
 		return record, nil
 	}
 
-	pool, poolErr := storagepool.Get(id)
+	pool, poolErr := storagepool.Get(storagePoolID)
 	if poolErr == nil && pool != nil && strings.TrimSpace(pool.StorageID) != "" {
 		return storage.Get(strings.TrimSpace(pool.StorageID))
 	}
@@ -507,11 +506,10 @@ func resolveUploadStorage(id string) (*storage.Storage, error) {
 }
 
 func finalizeTusUpload(ctx context.Context, meta *tusUploadMeta) error {
-	storageRecord, err := resolveUploadStorage(meta.StorageID)
+	storageRecord, err := resolveUploadStorage(meta.StoragePoolID)
 	if err != nil {
 		return fmt.Errorf("storage not found: %w", err)
 	}
-	meta.StorageID = storageRecord.ID
 
 	parentPath := filepath.Clean(storageRecord.MountPath)
 	if meta.ParentID != "" {
@@ -533,7 +531,7 @@ func finalizeTusUpload(ctx context.Context, meta *tusUploadMeta) error {
 	log.Printf(
 		"[UPLOAD] finalize id=%s storage=%s root=%s parent=%s relativePath=%q target=%s",
 		meta.ID,
-		meta.StorageID,
+		meta.StoragePoolID,
 		storageRecord.MountPath,
 		parentPath,
 		meta.RelativePath,
@@ -542,7 +540,7 @@ func finalizeTusUpload(ctx context.Context, meta *tusUploadMeta) error {
 
 	tempPath := tusTempFilePath(meta)
 	if storageRecord.Type == storage.Cloud {
-		jobItem, err := jobs.EnqueueCloudSync(storageRecord.ID, jobs.CloudSyncPayload{
+		jobItem, err := jobs.EnqueueCloudSync(meta.StoragePoolID, jobs.CloudSyncPayload{
 			LocalPath:   tempPath,
 			TargetPath:  targetPath,
 			ContentType: meta.FileType,

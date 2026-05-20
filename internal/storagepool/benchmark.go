@@ -7,14 +7,17 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
+	"nas-server/internal/storage"
 	commandrunner "nas-server/pkg/shell"
 )
 
 const (
 	defaultBenchmarkSizeGiB = 5
 	benchmarkChunkSize      = 8 * 1024 * 1024
+	cloudBenchmarkSizeBytes = 256 * 1024 * 1024
 )
 
 func (h *Handler) HandleBenchmarkPoolStream(w http.ResponseWriter, r *http.Request) {
@@ -24,7 +27,7 @@ func (h *Handler) HandleBenchmarkPoolStream(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	pool, err := Get(r.PathValue("poolId"))
+	pool, err := resolveBenchmarkPool(r.Context(), r.PathValue("poolId"))
 	if err != nil {
 		writeAPIError(w, http.StatusNotFound, "STORAGE_POOL_NOT_FOUND", "Storage pool not found")
 		return
@@ -55,6 +58,31 @@ func (h *Handler) HandleBenchmarkPoolStream(w http.ResponseWriter, r *http.Reque
 	writeSSEEvent(w, flusher, "completed", result)
 }
 
+func resolveBenchmarkPool(ctx context.Context, poolID string) (*StoragePool, error) {
+	pool, err := Get(poolID)
+	if err == nil {
+		return pool, nil
+	}
+
+	storageRecord, storageErr := storage.Get(poolID)
+	if storageErr != nil || storageRecord == nil {
+		return nil, err
+	}
+	if !isCloudStorage(*storageRecord) {
+		return nil, err
+	}
+	return &StoragePool{
+		ID:         storageRecord.ID,
+		StorageID:  storageRecord.ID,
+		Name:       storageRecord.Name,
+		Filesystem: storageRecord.Provider,
+		RaidLevel:  "single",
+		MountPath:  storageRecord.MountPath,
+		DataPath:   storageRecord.MountPath,
+		Devices:    []PoolDevice{},
+	}, nil
+}
+
 func BenchmarkPoolSync(ctx context.Context, pool *StoragePool, req BenchmarkRequest) (*BenchmarkResult, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("storage pool is required")
@@ -77,16 +105,17 @@ func BenchmarkPoolSync(ctx context.Context, pool *StoragePool, req BenchmarkRequ
 	}
 
 	testPath := filepath.Join(targetDir, ".yesnas-benchmark.tmp")
-	_, _ = commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "rm", "-f", testPath)
+	commandOptions := benchmarkCommandOptions(pool)
+	_, _ = commandrunner.RunWithOptions(ctx, commandOptions, "rm", "-f", testPath)
 	defer func() {
-		_, _ = commandrunner.RunWithOptions(context.Background(), commandrunner.Options{UseSudo: true}, "rm", "-f", testPath)
+		_, _ = commandrunner.RunWithOptions(context.Background(), commandOptions, "rm", "-f", testPath)
 	}()
 
-	writeSpeed, err := writeBenchmarkFile(ctx, testPath, sizeBytes)
+	writeSpeed, err := writeBenchmarkFile(ctx, testPath, sizeBytes, commandOptions)
 	if err != nil {
 		return nil, err
 	}
-	readSpeed, err := readBenchmarkFile(ctx, testPath)
+	readSpeed, err := readBenchmarkFile(ctx, testPath, commandOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -110,12 +139,15 @@ func BenchmarkPoolStream(ctx context.Context, pool *StoragePool, req BenchmarkRe
 	if pool == nil {
 		return nil, fmt.Errorf("storage pool is required")
 	}
+	sizeGiB := maxBenchmarkSizeGiB(req.SizeGiB)
+	sizeBytes := int64(sizeGiB) * 1024 * 1024 * 1024
+	if isCloudBenchmarkPool(pool) {
+		return BenchmarkCloudPoolStream(ctx, pool, sizeGiB, cloudBenchmarkSizeBytes, emit)
+	}
 	if !isMountpointActive(pool.MountPath) {
 		return nil, fmt.Errorf("storage pool is offline")
 	}
 
-	sizeGiB := maxBenchmarkSizeGiB(req.SizeGiB)
-	sizeBytes := int64(sizeGiB) * 1024 * 1024 * 1024
 	targetDir := pool.DataPath
 	if targetDir == "" {
 		targetDir = pool.MountPath
@@ -127,16 +159,17 @@ func BenchmarkPoolStream(ctx context.Context, pool *StoragePool, req BenchmarkRe
 	}
 
 	testPath := filepath.Join(targetDir, ".yesnas-benchmark.tmp")
-	_, _ = commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "rm", "-f", testPath)
+	commandOptions := benchmarkCommandOptions(pool)
+	_, _ = commandrunner.RunWithOptions(ctx, commandOptions, "rm", "-f", testPath)
 	defer func() {
-		_, _ = commandrunner.RunWithOptions(context.Background(), commandrunner.Options{UseSudo: true}, "rm", "-f", testPath)
+		_, _ = commandrunner.RunWithOptions(context.Background(), commandOptions, "rm", "-f", testPath)
 	}()
 
-	writeSpeed, err := runBenchmarkWriteStream(ctx, pool.ID, sizeGiB, testPath, sizeBytes, emit)
+	writeSpeed, err := runBenchmarkWriteStream(ctx, pool.ID, sizeGiB, testPath, sizeBytes, commandOptions, emit)
 	if err != nil {
 		return nil, err
 	}
-	readSpeed, err := runBenchmarkReadStream(ctx, pool.ID, sizeGiB, testPath, sizeBytes, emit)
+	readSpeed, err := runBenchmarkReadStream(ctx, pool.ID, sizeGiB, testPath, sizeBytes, commandOptions, emit)
 	if err != nil {
 		return nil, err
 	}
@@ -156,15 +189,75 @@ func BenchmarkPoolStream(ctx context.Context, pool *StoragePool, req BenchmarkRe
 	}, nil
 }
 
-func writeBenchmarkFile(ctx context.Context, path string, sizeBytes int64) (float64, error) {
+func BenchmarkCloudPoolStream(ctx context.Context, pool *StoragePool, sizeGiB int, sizeBytes int64, emit func(BenchmarkProgress) bool) (*BenchmarkResult, error) {
+	storageRecord, err := storage.Get(pool.StorageID)
+	if err != nil {
+		return nil, fmt.Errorf("load cloud storage: %w", err)
+	}
+	if strings.TrimSpace(storageRecord.Provider) != string(storage.ProviderGoogleDrive) {
+		return nil, fmt.Errorf("cloud benchmark is not supported for provider %s", storageRecord.Provider)
+	}
+	if err := UpsertCloudPoolRecord(cloudStoragePool(*storageRecord)); err != nil {
+		return nil, fmt.Errorf("save cloud storage pool record: %w", err)
+	}
+	result, err := storage.BenchmarkGoogleDrive(ctx, storageRecord, sizeBytes, func(progress storage.CloudBenchmarkProgress) bool {
+		elapsed := time.Since(progress.StartedAt).Seconds()
+		percent := 0.0
+		if progress.TotalBytes > 0 {
+			percent = float64(progress.CompletedBytes) * 100 / float64(progress.TotalBytes)
+		}
+		return emit(BenchmarkProgress{
+			PoolID:                  pool.ID,
+			Stage:                   progress.Stage,
+			SizeGiB:                 sizeGiB,
+			TotalBytes:              progress.TotalBytes,
+			CompletedBytes:          progress.CompletedBytes,
+			RemainingBytes:          maxInt64(progress.TotalBytes-progress.CompletedBytes, 0),
+			Percent:                 percent,
+			CurrentSpeedBytesPerSec: progress.CurrentSpeedBytesPerSec,
+			ElapsedSeconds:          elapsed,
+			UpdatedAt:               time.Now(),
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	testedAt := time.Now()
+	if err := UpdateBenchmarkResult(pool.ID, result.ReadSpeedBytesPerSec, result.WriteSpeedBytesPerSec, testedAt); err != nil {
+		return nil, fmt.Errorf("update cloud storage pool benchmark result: %w", err)
+	}
+	return &BenchmarkResult{
+		PoolID:                pool.ID,
+		Path:                  result.RemotePath,
+		SizeBytes:             result.SizeBytes,
+		WriteSpeedBytesPerSec: result.WriteSpeedBytesPerSec,
+		ReadSpeedBytesPerSec:  result.ReadSpeedBytesPerSec,
+		TestedAt:              testedAt,
+	}, nil
+}
+
+func isCloudBenchmarkPool(pool *StoragePool) bool {
+	return pool != nil && strings.TrimSpace(pool.Filesystem) != "" && strings.TrimSpace(pool.Filesystem) != "btrfs"
+}
+
+func benchmarkCommandOptions(pool *StoragePool) commandrunner.Options {
+	if pool != nil && pool.Filesystem != "btrfs" {
+		return commandrunner.Options{}
+	}
+	return commandrunner.Options{UseSudo: true}
+}
+
+func writeBenchmarkFile(ctx context.Context, path string, sizeBytes int64, commandOptions commandrunner.Options) (float64, error) {
 	start := time.Now()
 	count := sizeBytes / benchmarkChunkSize
 	if count <= 0 {
 		count = 1
 	}
+	commandOptions.LogStderrOnSuccess = true
 	if _, err := commandrunner.RunWithOptions(
 		ctx,
-		commandrunner.Options{UseSudo: true, LogStderrOnSuccess: true},
+		commandOptions,
 		"dd",
 		"if=/dev/zero",
 		"of="+path,
@@ -182,11 +275,12 @@ func writeBenchmarkFile(ctx context.Context, path string, sizeBytes int64) (floa
 	return float64(sizeBytes) / elapsed, nil
 }
 
-func readBenchmarkFile(ctx context.Context, path string) (float64, error) {
+func readBenchmarkFile(ctx context.Context, path string, commandOptions commandrunner.Options) (float64, error) {
 	start := time.Now()
+	commandOptions.LogStderrOnSuccess = true
 	_, err := commandrunner.RunWithOptions(
 		ctx,
-		commandrunner.Options{UseSudo: true, LogStderrOnSuccess: true},
+		commandOptions,
 		"dd",
 		"if="+path,
 		"of=/dev/null",
@@ -197,7 +291,7 @@ func readBenchmarkFile(ctx context.Context, path string) (float64, error) {
 	if err != nil {
 		_, fallbackErr := commandrunner.RunWithOptions(
 			ctx,
-			commandrunner.Options{UseSudo: true, LogStderrOnSuccess: true},
+			commandOptions,
 			"dd",
 			"if="+path,
 			"of=/dev/null",
@@ -241,7 +335,7 @@ func parseBenchmarkSizeGiB(r *http.Request) (int, error) {
 	return sizeGiB, nil
 }
 
-func runBenchmarkWriteStream(ctx context.Context, poolID string, sizeGiB int, path string, totalBytes int64, emit func(BenchmarkProgress) bool) (float64, error) {
+func runBenchmarkWriteStream(ctx context.Context, poolID string, sizeGiB int, path string, totalBytes int64, commandOptions commandrunner.Options, emit func(BenchmarkProgress) bool) (float64, error) {
 	const chunkMiB int64 = 256
 	chunkBytes := chunkMiB * 1024 * 1024
 	completed := int64(0)
@@ -265,7 +359,7 @@ func runBenchmarkWriteStream(ctx context.Context, poolID string, sizeGiB int, pa
 
 		if _, err := commandrunner.RunWithOptions(
 			ctx,
-			commandrunner.Options{UseSudo: true},
+			commandOptions,
 			"dd",
 			"if=/dev/zero",
 			"of="+path,
@@ -307,12 +401,12 @@ func runBenchmarkWriteStream(ctx context.Context, poolID string, sizeGiB int, pa
 	return float64(totalBytes) / totalElapsed, nil
 }
 
-func runBenchmarkReadStream(ctx context.Context, poolID string, sizeGiB int, path string, totalBytes int64, emit func(BenchmarkProgress) bool) (float64, error) {
+func runBenchmarkReadStream(ctx context.Context, poolID string, sizeGiB int, path string, totalBytes int64, commandOptions commandrunner.Options, emit func(BenchmarkProgress) bool) (float64, error) {
 	const chunkMiB int64 = 256
 	chunkBytes := chunkMiB * 1024 * 1024
 	completed := int64(0)
 	stageStart := time.Now()
-	useDirect := true
+	useDirect := commandOptions.UseSudo
 
 	for completed < totalBytes {
 		select {
@@ -343,10 +437,10 @@ func runBenchmarkReadStream(ctx context.Context, poolID string, sizeGiB int, pat
 			args = append(args, "iflag=direct")
 		}
 
-		if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "dd", args...); err != nil {
+		if _, err := commandrunner.RunWithOptions(ctx, commandOptions, "dd", args...); err != nil {
 			if useDirect {
 				useDirect = false
-				if _, fallbackErr := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "dd",
+				if _, fallbackErr := commandrunner.RunWithOptions(ctx, commandOptions, "dd",
 					"if="+path,
 					"of=/dev/null",
 					"bs=1M",

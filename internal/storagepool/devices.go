@@ -290,7 +290,7 @@ func persistPoolMount(ctx context.Context, devicePath string, mountPath string) 
 	if uuid == "" {
 		return fmt.Errorf("filesystem uuid is empty for %s", devicePath)
 	}
-	entry := fmt.Sprintf("UUID=%s %s btrfs defaults 0 0", uuid, mountPath)
+	entry := fmt.Sprintf("UUID=%s %s btrfs defaults,nofail,x-systemd.device-timeout=5 0 0", uuid, mountPath)
 	existingFstab, err := os.ReadFile("/etc/fstab")
 	if err == nil {
 		if fstabContainsEntry(string(existingFstab), uuid, mountPath) {

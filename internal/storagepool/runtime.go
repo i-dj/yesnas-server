@@ -19,6 +19,9 @@ import (
 func BuildResponses(ctx context.Context, pools []StoragePool) []Response {
 	items := make([]Response, 0, len(pools))
 	for _, pool := range pools {
+		if isCloudPoolRecord(pool) {
+			continue
+		}
 		items = append(items, buildResponse(ctx, pool))
 	}
 	return items
@@ -74,16 +77,53 @@ func buildResponse(ctx context.Context, pool StoragePool) Response {
 func BuildCloudResponses(ctx context.Context, items []storage.Storage) []Response {
 	responses := make([]Response, 0, len(items))
 	for _, item := range items {
-		if item.Type != storage.Cloud {
+		if !isCloudStorage(item) {
 			continue
 		}
 		if token, err := storage.GetTokenByStorageID(item.ID); err == nil && token != nil {
 			_ = storage.EnsureGoogleDriveMounted(ctx, &item, token)
 		}
 		storage.BackfillGoogleDriveAccountEmail(ctx, &item)
-		responses = append(responses, buildCloudResponse(item))
+		warnings := refreshCloudUsage(ctx, &item)
+		cloudPool := cloudStoragePool(item)
+		if err := UpsertCloudPoolRecord(cloudPool); err != nil {
+			warnings = append(warnings, "failed to save cloud storage pool record: "+err.Error())
+		} else if savedPool, err := Get(item.ID); err == nil {
+			cloudPool = *savedPool
+		}
+		if cloudPool.Devices == nil {
+			cloudPool.Devices = []PoolDevice{}
+		}
+		response := buildCloudResponse(item)
+		response.StoragePool = cloudPool
+		response.Warnings = append(response.Warnings, warnings...)
+		responses = append(responses, response)
 	}
 	return responses
+}
+
+func isCloudStorage(item storage.Storage) bool {
+	if item.Type == storage.Cloud {
+		return true
+	}
+	return strings.TrimSpace(item.Provider) == string(storage.ProviderGoogleDrive)
+}
+
+func isCloudPoolRecord(pool StoragePool) bool {
+	return strings.TrimSpace(pool.Filesystem) == string(storage.ProviderGoogleDrive)
+}
+
+func refreshCloudUsage(ctx context.Context, item *storage.Storage) []string {
+	if item == nil {
+		return nil
+	}
+	switch strings.TrimSpace(item.Provider) {
+	case string(storage.ProviderGoogleDrive):
+		if _, err := storage.RefreshGoogleDriveUsage(ctx, item); err != nil {
+			return []string{"failed to read google drive usage: " + err.Error()}
+		}
+	}
+	return nil
 }
 
 func buildCloudResponse(item storage.Storage) Response {
@@ -106,17 +146,7 @@ func buildCloudResponse(item storage.Storage) Response {
 	}
 
 	resp := Response{
-		StoragePool: StoragePool{
-			ID:         item.ID,
-			StorageID:  item.ID,
-			Name:       item.Name,
-			Filesystem: string(item.Provider),
-			RaidLevel:  "single",
-			MountPath:  item.MountPath,
-			DataPath:   item.MountPath,
-			Devices:    []PoolDevice{},
-			CreatedAt:  parseStorageTime(item.UpdatedAt),
-		},
+		StoragePool:   cloudStoragePool(item),
 		Kind:          "cloud",
 		Provider:      item.Provider,
 		RootPath:      item.RootPath,
@@ -134,6 +164,20 @@ func buildCloudResponse(item storage.Storage) Response {
 		LastCheckedAt: now,
 	}
 	return resp
+}
+
+func cloudStoragePool(item storage.Storage) StoragePool {
+	return StoragePool{
+		ID:         item.ID,
+		StorageID:  item.ID,
+		Name:       item.Name,
+		Filesystem: string(item.Provider),
+		RaidLevel:  "single",
+		MountPath:  item.MountPath,
+		DataPath:   item.MountPath,
+		Devices:    []PoolDevice{},
+		CreatedAt:  parseStorageTime(item.UpdatedAt),
+	}
 }
 
 func deriveCloudHealth(status storage.Status) string {
@@ -389,18 +433,18 @@ func mergePoolSnapshots(poolID string, mountPath string, systemSnapshots []Snaps
 		}
 		createdAt := meta.CreatedAt
 		merged = append(merged, Snapshot{
-			MetadataID: meta.ID,
-			SystemID:   meta.SystemSnapshotID,
-			Gen:        meta.SystemGeneration,
-			Path:       normalizedPath,
-			Name:       meta.Name,
-			SourcePath: meta.SourcePath,
+			MetadataID:  meta.ID,
+			SystemID:    meta.SystemSnapshotID,
+			Gen:         meta.SystemGeneration,
+			Path:        normalizedPath,
+			Name:        meta.Name,
+			SourcePath:  meta.SourcePath,
 			Description: meta.Description,
-			CreatedBy:  meta.CreatedBy,
-			CreatedAt:  &createdAt,
-			UpdatedAt:  meta.UpdatedAt,
-			IsReadOnly: meta.IsReadOnly,
-			Registered: true,
+			CreatedBy:   meta.CreatedBy,
+			CreatedAt:   &createdAt,
+			UpdatedAt:   meta.UpdatedAt,
+			IsReadOnly:  meta.IsReadOnly,
+			Registered:  true,
 		})
 	}
 	return merged
