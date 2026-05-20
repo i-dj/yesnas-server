@@ -80,6 +80,10 @@ func newRouter() http.Handler {
 	mux.HandleFunc("HEAD /api/v1/uploads/tus/{uploadId}", filesHandler.HandleTusHead)
 	mux.HandleFunc("PATCH /api/v1/uploads/tus/{uploadId}", filesHandler.HandleTusPatch)
 	mux.HandleFunc("DELETE /api/v1/uploads/tus/{uploadId}", filesHandler.HandleTusDelete)
+	mux.HandleFunc("POST /api/v1/upload2", handleUpload2Create)
+	mux.HandleFunc("HEAD /api/v1/upload2/{uploadId}", handleUpload2Head)
+	mux.HandleFunc("PATCH /api/v1/upload2/{uploadId}", handleUpload2Patch)
+	mux.HandleFunc("DELETE /api/v1/upload2/{uploadId}", handleUpload2Delete)
 	mux.HandleFunc("GET /api/v1/jobs", jobsHandler.HandleList)
 	mux.HandleFunc("GET /api/v1/jobs/{jobId}", jobsHandler.HandleGet)
 
@@ -92,7 +96,7 @@ func cors(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, HEAD, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Tus-Resumable, Upload-Length, Upload-Offset, Upload-Metadata")
 		w.Header().Set("Access-Control-Expose-Headers", "Location, Upload-Offset, Upload-Length, Tus-Resumable, Tus-Version, Tus-Extension, Tus-Max-Size")
-		if strings.HasPrefix(r.URL.Path, "/api/v1/uploads/tus") {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/uploads/tus") || strings.HasPrefix(r.URL.Path, "/api/v1/upload2") {
 			w.Header().Set("Tus-Resumable", "1.0.0")
 			w.Header().Set("Tus-Version", "1.0.0")
 			w.Header().Set("Tus-Extension", "creation,termination")
