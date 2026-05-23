@@ -168,7 +168,7 @@ func validateRaidDeviceCount(level string, count int) error {
 
 func normalizeDevicePaths(paths []string) ([]string, error) {
 	if len(paths) == 0 {
-		return nil, fmt.Errorf("至少需要一个磁盘路径")
+		return nil, fmt.Errorf("at least one device path is required")
 	}
 	result := make([]string, 0, len(paths))
 	seen := make(map[string]struct{}, len(paths))

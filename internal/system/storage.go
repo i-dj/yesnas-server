@@ -9,7 +9,7 @@ import (
 func (h *Handler) HandleStorageList(w http.ResponseWriter, r *http.Request) {
 	storages, err := storage.List()
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "STORAGE_LIST_FAILED", "获取存储列表失败: "+err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "STORAGE_LIST_FAILED", "Failed to list storages: "+err.Error())
 		return
 	}
 	if storages == nil {

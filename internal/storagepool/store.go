@@ -219,7 +219,7 @@ func UpdateBenchmarkResult(poolID string, readSpeedBytesPerSec float64, writeSpe
 
 func ValidateName(name string) error {
 	if name == "" {
-		return fmt.Errorf("存储池名称不能为空")
+		return fmt.Errorf("storage pool name is required")
 	}
 	return nil
 }

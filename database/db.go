@@ -21,18 +21,18 @@ func InitDB(dbPath string) error {
 	dir := filepath.Dir(dbPath)
 	if dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("无法创建数据库目录: %w", err)
+			return fmt.Errorf("failed to create database directory: %w", err)
 		}
 	}
 
 	var err error
-	DB, err = sqlx.Open("sqlite", dbPath) // ← 两处都改：sqlx.Open + "sqlite3"
+	DB, err = sqlx.Open("sqlite", dbPath)
 	if err != nil {
-		return fmt.Errorf("打开数据库失败: %w", err)
+		return fmt.Errorf("failed to open database: %w", err)
 	}
 
 	if err = DB.Ping(); err != nil {
-		return fmt.Errorf("数据库连接验证失败: %w", err)
+		return fmt.Errorf("failed to verify database connection: %w", err)
 	}
 
 	DB.SetMaxOpenConns(1)
@@ -46,26 +46,26 @@ func InitDB(dbPath string) error {
 	}
 	for _, pragma := range pragmas {
 		if _, err = DB.Exec(pragma); err != nil {
-			log.Printf("警告: 执行 SQLite pragma 失败: %s err=%v", strings.TrimSpace(pragma), err)
+			log.Printf("warning: failed to execute SQLite pragma: %s err=%v", strings.TrimSpace(pragma), err)
 		}
 	}
 
-	log.Printf("数据库初始化成功: %s", dbPath)
+	log.Printf("database initialized: %s", dbPath)
 	return nil
 }
 
-// CreateTables 执行嵌入的 SQL 文件来初始化表结构
+// CreateTables initializes the database schema from the embedded SQL file.
 func CreateTables() error {
 	if DB == nil {
-		return fmt.Errorf("数据库未初始化，请先调用 InitDB")
+		return fmt.Errorf("database is not initialized; call InitDB first")
 	}
 
 	_, err := DB.Exec(initSQL)
 	if err != nil {
-		return fmt.Errorf("初始化表结构失败: %w", err)
+		return fmt.Errorf("failed to initialize database schema: %w", err)
 	}
 
-	log.Println("数据库表结构检查/创建完成")
+	log.Println("database schema checked/created")
 	return nil
 }
 
@@ -86,7 +86,7 @@ func EnsureStorageSchema() error {
 
 func EnsureStorageTokenSchema() error {
 	if DB == nil {
-		return fmt.Errorf("数据库未初始化，请先调用 InitDB")
+		return fmt.Errorf("database is not initialized; call InitDB first")
 	}
 
 	if err := ensureColumns("storage_token", map[string]string{
@@ -105,7 +105,7 @@ func EnsureStorageTokenSchema() error {
 
 func EnsureStoragePoolSchema() error {
 	if DB == nil {
-		return fmt.Errorf("数据库未初始化，请先调用 InitDB")
+		return fmt.Errorf("database is not initialized; call InitDB first")
 	}
 	if err := ensureColumns("storage_pool", map[string]string{
 		"data_path":                 "TEXT DEFAULT ''",
@@ -120,7 +120,7 @@ func EnsureStoragePoolSchema() error {
 
 func EnsureStoragePoolSnapshotSchema() error {
 	if DB == nil {
-		return fmt.Errorf("数据库未初始化，请先调用 InitDB")
+		return fmt.Errorf("database is not initialized; call InitDB first")
 	}
 	if err := ensureColumns("storage_pool_snapshot", map[string]string{
 		"system_snapshot_id": "INTEGER DEFAULT 0",
@@ -133,7 +133,7 @@ func EnsureStoragePoolSnapshotSchema() error {
 
 func EnsureJobsSchema() error {
 	if DB == nil {
-		return fmt.Errorf("数据库未初始化，请先调用 InitDB")
+		return fmt.Errorf("database is not initialized; call InitDB first")
 	}
 	return ensureColumns("jobs", map[string]string{
 		"title":         "TEXT DEFAULT ''",
@@ -152,7 +152,7 @@ func EnsureJobsSchema() error {
 
 func ensureColumns(table string, columns map[string]string) error {
 	if DB == nil {
-		return fmt.Errorf("数据库未初始化，请先调用 InitDB")
+		return fmt.Errorf("database is not initialized; call InitDB first")
 	}
 
 	existing, err := getTableColumns(table)
@@ -166,7 +166,7 @@ func ensureColumns(table string, columns map[string]string) error {
 		}
 		stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, name, ddl)
 		if _, err := DB.Exec(stmt); err != nil {
-			return fmt.Errorf("为表 %s 添加列 %s 失败: %w", table, name, err)
+			return fmt.Errorf("failed to add column %s to table %s: %w", name, table, err)
 		}
 	}
 	return nil
@@ -175,7 +175,7 @@ func ensureColumns(table string, columns map[string]string) error {
 func getTableColumns(table string) (map[string]bool, error) {
 	rows, err := DB.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
-		return nil, fmt.Errorf("读取表 %s 结构失败: %w", table, err)
+		return nil, fmt.Errorf("failed to read table %s schema: %w", table, err)
 	}
 	defer rows.Close()
 
@@ -190,7 +190,7 @@ func getTableColumns(table string) (map[string]bool, error) {
 			pk         int
 		)
 		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &pk); err != nil {
-			return nil, fmt.Errorf("扫描表 %s 结构失败: %w", table, err)
+			return nil, fmt.Errorf("failed to scan table %s schema: %w", table, err)
 		}
 		columns[strings.ToLower(name)] = true
 	}
@@ -198,20 +198,16 @@ func getTableColumns(table string) (map[string]bool, error) {
 }
 
 func RunSeed(filePath string) error {
-	// 1. 读取 SQL 文件
 	content, err := os.ReadFile(filePath)
 	if err != nil {
-		// 如果文件不存在，可以选择忽略或者报错
-		return fmt.Errorf("读取 seed 文件失败: %v", err)
+		return fmt.Errorf("failed to read seed file: %v", err)
 	}
 
-	// 2. 执行 SQL
-	// 注意：Exec 可以执行包含多个语句的字符串
 	_, err = DB.Exec(string(content))
 	if err != nil {
-		return fmt.Errorf("执行 seed 数据失败: %v", err)
+		return fmt.Errorf("failed to execute seed data: %v", err)
 	}
 
-	log.Println("✅ Seed 数据初始化成功")
+	log.Println("seed data initialized")
 	return nil
 }

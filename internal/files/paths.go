@@ -42,9 +42,9 @@ func buildBreadcrumbs(path, root string) []Breadcrumb {
 	path = filepath.Clean(path)
 	root = filepath.Clean(root)
 	if !strings.HasPrefix(path, root) {
-		return []Breadcrumb{{ID: encodeFilePath(root), Name: "临时目录测试"}}
+		return []Breadcrumb{{ID: encodeFilePath(root), Name: "Root"}}
 	}
-	crumbs := []Breadcrumb{{ID: encodeFilePath(root), Name: "临时目录测试"}}
+	crumbs := []Breadcrumb{{ID: encodeFilePath(root), Name: "Root"}}
 	rel, _ := filepath.Rel(root, path)
 	current := root
 	for _, part := range strings.Split(rel, string(os.PathSeparator)) {

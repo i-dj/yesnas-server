@@ -14,7 +14,7 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 	storageID := r.PathValue("storage")
 	storageRecord, err := storage.Get(storageID)
 	if err != nil {
-		writeAPIError(w, http.StatusNotFound, "STORAGE_NOT_FOUND", "存储节点不存在: "+storageID)
+		writeAPIError(w, http.StatusNotFound, "STORAGE_NOT_FOUND", "Storage not found: "+storageID)
 		return
 	}
 
@@ -29,7 +29,7 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 	case "trash":
 		items, err := ListRecycleBinItemsByStorage(storageID)
 		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "TRASH_LIST_FAILED", "获取回收站失败: "+err.Error())
+			writeAPIError(w, http.StatusInternalServerError, "TRASH_LIST_FAILED", "Failed to list trash: "+err.Error())
 			return
 		}
 
@@ -40,14 +40,14 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 
 		writeJSON(w, TrashResponseData{
 			Files:       paginate(trashNodes, limit, offset),
-			Breadcrumbs: []Breadcrumb{{ID: encodeFilePath(filepath.Join(root, ".trash")), Name: "回收站"}},
+			Breadcrumbs: []Breadcrumb{{ID: encodeFilePath(filepath.Join(root, ".trash")), Name: "Trash"}},
 		})
 		return
 
 	case "tag":
 		favs, err := ListFavorites()
 		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "TAG_LIST_FAILED", "查询标签失败: "+err.Error())
+			writeAPIError(w, http.StatusInternalServerError, "TAG_LIST_FAILED", "Failed to list tags: "+err.Error())
 			return
 		}
 

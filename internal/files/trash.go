@@ -17,8 +17,8 @@ import (
 func (h *Handler) HandleGlobalTagList(w http.ResponseWriter, r *http.Request) {
 	favs, err := ListFavorites()
 	if err != nil {
-		log.Printf("[GLOBAL-TAG-ERROR] 读取收藏失败: %v", err)
-		writeAPIError(w, http.StatusInternalServerError, "GLOBAL_TAG_LIST_FAILED", "获取标签文件失败")
+		log.Printf("[GLOBAL-TAG-ERROR] failed to read favorites: %v", err)
+		writeAPIError(w, http.StatusInternalServerError, "GLOBAL_TAG_LIST_FAILED", "Failed to list tagged files")
 		return
 	}
 
@@ -26,7 +26,7 @@ func (h *Handler) HandleGlobalTagList(w http.ResponseWriter, r *http.Request) {
 	for _, fav := range favs {
 		storageRecord, err := storage.Get(fav.StorageID)
 		if err != nil {
-			log.Printf("[GLOBAL-TAG-WARN] 存储节点 %s 已失效", fav.StorageID)
+			log.Printf("[GLOBAL-TAG-WARN] storage %s is no longer available", fav.StorageID)
 			continue
 		}
 
@@ -60,8 +60,8 @@ func (h *Handler) HandleGlobalTagList(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleGlobalTrashList(w http.ResponseWriter, r *http.Request) {
 	items, err := ListAllRecycleBinItems()
 	if err != nil {
-		log.Printf("[GLOBAL-TRASH-ERROR] 读取回收站失败: %v", err)
-		writeAPIError(w, http.StatusInternalServerError, "GLOBAL_TRASH_LIST_FAILED", "获取回收站文件失败")
+		log.Printf("[GLOBAL-TRASH-ERROR] failed to read trash: %v", err)
+		writeAPIError(w, http.StatusInternalServerError, "GLOBAL_TRASH_LIST_FAILED", "Failed to list trash files")
 		return
 	}
 
@@ -69,7 +69,7 @@ func (h *Handler) HandleGlobalTrashList(w http.ResponseWriter, r *http.Request) 
 	for _, item := range items {
 		storageRecord, err := storage.Get(item.StorageID)
 		if err != nil {
-			log.Printf("[GLOBAL-TRASH-WARN] 存储节点 %s 已失效", item.StorageID)
+			log.Printf("[GLOBAL-TRASH-WARN] storage %s is no longer available", item.StorageID)
 			continue
 		}
 		nodes = append(nodes, buildTrashNode(item, storageRecord.MountPath))
@@ -82,65 +82,65 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	storageID := r.PathValue("storage")
 	fileID := r.PathValue("fileId")
 	if fileID == "" {
-		writeAPIError(w, http.StatusBadRequest, "FILE_ID_REQUIRED", "fileId 不能为空")
+		writeAPIError(w, http.StatusBadRequest, "FILE_ID_REQUIRED", "fileId is required")
 		return
 	}
 
 	storageRecord, err := storage.Get(storageID)
 	if err != nil {
-		writeAPIError(w, http.StatusNotFound, "STORAGE_NOT_FOUND", "存储节点不存在: "+storageID)
+		writeAPIError(w, http.StatusNotFound, "STORAGE_NOT_FOUND", "Storage not found: "+storageID)
 		return
 	}
 
 	sourcePath, err := decodeFileID(fileID)
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "INVALID_FILE_ID", "fileId 无效")
+		writeAPIError(w, http.StatusBadRequest, "INVALID_FILE_ID", "Invalid fileId")
 		return
 	}
 	if !isPathWithinRoot(storageRecord.MountPath, sourcePath) {
-		writeAPIError(w, http.StatusBadRequest, "PATH_OUT_OF_RANGE", "目标路径超出存储范围")
+		writeAPIError(w, http.StatusBadRequest, "PATH_OUT_OF_RANGE", "Target path is outside the storage root")
 		return
 	}
 
 	trashRoot := filepath.Join(storageRecord.MountPath, ".trash")
 	if isPathWithinRoot(trashRoot, sourcePath) {
-		writeAPIError(w, http.StatusBadRequest, "ALREADY_IN_TRASH", "回收站中的文件不能重复移入回收站")
+		writeAPIError(w, http.StatusBadRequest, "ALREADY_IN_TRASH", "Files already in trash cannot be moved to trash again")
 		return
 	}
 
 	info, err := os.Stat(sourcePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			writeAPIError(w, http.StatusNotFound, "FILE_NOT_FOUND", "文件不存在")
+			writeAPIError(w, http.StatusNotFound, "FILE_NOT_FOUND", "File not found")
 			return
 		}
-		writeAPIError(w, http.StatusInternalServerError, "STAT_FILE_FAILED", "读取文件信息失败: "+err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "STAT_FILE_FAILED", "Failed to read file info: "+err.Error())
 		return
 	}
 
 	originalRelPath, err := filepath.Rel(storageRecord.MountPath, sourcePath)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "REL_PATH_FAILED", "计算原始路径失败: "+err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "REL_PATH_FAILED", "Failed to resolve original path: "+err.Error())
 		return
 	}
 
 	now := time.Now()
 	trashDir := buildTrashDir(storageRecord.MountPath, now)
 	if err := ensureDir(trashDir); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "CREATE_TRASH_DIR_FAILED", "创建回收站目录失败: "+err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "CREATE_TRASH_DIR_FAILED", "Failed to create trash directory: "+err.Error())
 		return
 	}
 
 	targetPath := filepath.Join(trashDir, uniqueTrashName(info.Name()))
 	if err := os.Rename(sourcePath, targetPath); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "MOVE_TO_TRASH_FAILED", "移动到回收站失败: "+err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "MOVE_TO_TRASH_FAILED", "Failed to move file to trash: "+err.Error())
 		return
 	}
 
 	recycleRelPath, err := filepath.Rel(storageRecord.MountPath, targetPath)
 	if err != nil {
 		_ = os.Rename(targetPath, sourcePath)
-		writeAPIError(w, http.StatusInternalServerError, "TRASH_REL_PATH_FAILED", "计算回收站路径失败: "+err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "TRASH_REL_PATH_FAILED", "Failed to resolve trash path: "+err.Error())
 		return
 	}
 
@@ -159,12 +159,12 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		_ = os.Rename(targetPath, sourcePath)
-		writeAPIError(w, http.StatusInternalServerError, "RECYCLE_RECORD_FAILED", "写入回收站记录失败: "+err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "RECYCLE_RECORD_FAILED", "Failed to write trash record: "+err.Error())
 		return
 	}
 
 	if err := DeleteFavoriteByPath(storageID, filepath.ToSlash(originalRelPath)); err != nil {
-		log.Printf("[RECYCLE-WARN] 删除收藏记录失败: storage=%s path=%s err=%v", storageID, originalRelPath, err)
+		log.Printf("[RECYCLE-WARN] failed to delete favorite record: storage=%s path=%s err=%v", storageID, originalRelPath, err)
 	}
 
 	writeJSON(w, DeleteFileResponse{

@@ -38,7 +38,7 @@ func newRouter() http.Handler {
 		log.Fatalf("Ensure Jobs Schema error: %v", err)
 	}
 	if err := database.RunSeed("database/seed.sql"); err != nil {
-		log.Printf("提示: %v", err)
+		log.Printf("notice: %v", err)
 	}
 	jobsmodule.StartWorker()
 
@@ -82,6 +82,10 @@ func newRouter() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/uploads/tus/{uploadId}", filesHandler.HandleTusDelete)
 	mux.HandleFunc("GET /api/v1/jobs", jobsHandler.HandleList)
 	mux.HandleFunc("GET /api/v1/jobs/{jobId}", jobsHandler.HandleGet)
+	mux.HandleFunc("DELETE /api/v1/jobs/{jobId}", jobsHandler.HandleDelete)
+	mux.HandleFunc("POST /api/v1/jobs/{jobId}/pause", jobsHandler.HandlePause)
+	mux.HandleFunc("POST /api/v1/jobs/{jobId}/resume", jobsHandler.HandleResume)
+	mux.HandleFunc("POST /api/v1/jobs/{jobId}/cancel", jobsHandler.HandleCancel)
 
 	return cors(mux)
 }

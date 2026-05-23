@@ -1,4 +1,4 @@
--- 存储节点表
+-- Storage table
 CREATE TABLE IF NOT EXISTS storage (
     id           TEXT PRIMARY KEY,
     name         TEXT NOT NULL,
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_status_created_at ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_type_created_at ON jobs(type, created_at);
 
--- 收藏表
+-- Favorites table
 CREATE TABLE IF NOT EXISTS favorites (
     id           TEXT PRIMARY KEY,
     storage_id   TEXT NOT NULL,
@@ -127,16 +127,16 @@ CREATE TABLE IF NOT EXISTS favorites (
     file_path    TEXT NOT NULL,
     color        TEXT,
     created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
-    -- 同一个存储节点下的相对路径必须唯一
+    -- Relative paths must be unique within the same storage.
     UNIQUE(storage_id, file_path),
-    -- 级联删除：删除存储节点时自动删除其下的所有收藏
+    -- Cascade delete favorites when the storage is deleted.
     FOREIGN KEY (storage_id) REFERENCES storage(id) ON DELETE CASCADE
 );
 
--- 索引优化
+-- Index optimization
 CREATE INDEX IF NOT EXISTS idx_fav_storage ON favorites(storage_id);
 
--- 回收站表
+-- Trash table
 CREATE TABLE IF NOT EXISTS recycle_bin (
     id             TEXT PRIMARY KEY,
     storage_id     TEXT NOT NULL,
