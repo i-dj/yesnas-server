@@ -80,11 +80,7 @@ func BuildCloudResponses(ctx context.Context, items []storage.Storage) []Respons
 		if !isCloudStorage(item) {
 			continue
 		}
-		if token, err := storage.GetTokenByStorageID(item.ID); err == nil && token != nil {
-			_ = storage.EnsureGoogleDriveMounted(ctx, &item, token)
-		}
-		storage.BackfillGoogleDriveAccountEmail(ctx, &item)
-		warnings := refreshCloudUsage(ctx, &item)
+		warnings := []string{}
 		cloudPool := cloudStoragePool(item)
 		if err := UpsertCloudPoolRecord(cloudPool); err != nil {
 			warnings = append(warnings, "failed to save cloud storage pool record: "+err.Error())
@@ -137,12 +133,20 @@ func buildCloudResponse(item storage.Storage) Response {
 	if mounted {
 		status = string(storage.StatusOnline)
 		health = "healthy"
+	} else if item.Status == storage.StatusOnline {
+		status = string(storage.StatusOnline)
+		health = "warning"
 	} else if item.Status == storage.StatusError {
 		status = string(storage.StatusError)
 		health = "error"
 	} else {
 		status = string(storage.StatusOffline)
 		health = "offline"
+	}
+
+	warnings := []string{}
+	if item.Status == storage.StatusOnline && !mounted {
+		warnings = append(warnings, "cloud storage is online, but the local mount is not active")
 	}
 
 	resp := Response{
@@ -160,7 +164,7 @@ func buildCloudResponse(item storage.Storage) Response {
 		UsagePercent:  calculateUsagePercent(uint64(clampNonNegativeInt64(item.TotalSize-item.FreeSize)), uint64(clampNonNegativeInt64(item.TotalSize))),
 		SnapshotCount: 0,
 		Snapshots:     []Snapshot{},
-		Warnings:      []string{},
+		Warnings:      warnings,
 		LastCheckedAt: now,
 	}
 	return resp

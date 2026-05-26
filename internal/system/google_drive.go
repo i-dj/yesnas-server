@@ -55,6 +55,7 @@ func (h *Handler) HandleGoogleDriveCallback(w http.ResponseWriter, r *http.Reque
 
 func (h *Handler) HandleStartGoogleDriveConnectRedirect(w http.ResponseWriter, r *http.Request) {
 	req := storage.GoogleDriveConnectRequest{
+		StorageID:          strings.TrimSpace(r.URL.Query().Get("storageId")),
 		Name:               strings.TrimSpace(r.URL.Query().Get("name")),
 		RootPath:           strings.TrimSpace(r.URL.Query().Get("rootPath")),
 		Scope:              strings.TrimSpace(r.URL.Query().Get("scope")),

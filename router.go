@@ -6,10 +6,13 @@ import (
 	"strings"
 
 	"nas-server/database"
+	cloudmonitor "nas-server/internal/cloudmonitor"
 	filesmodule "nas-server/internal/files"
 	jobsmodule "nas-server/internal/jobs"
+	smbmodule "nas-server/internal/smb"
 	storagepool "nas-server/internal/storagepool"
 	systemmodule "nas-server/internal/system"
+	usersmodule "nas-server/internal/users"
 )
 
 type Router struct{}
@@ -37,16 +40,26 @@ func newRouter() http.Handler {
 	if err := database.EnsureJobsSchema(); err != nil {
 		log.Fatalf("Ensure Jobs Schema error: %v", err)
 	}
+	if err := database.EnsureUsersSchema(); err != nil {
+		log.Fatalf("Ensure Users Schema error: %v", err)
+	}
+	if err := database.EnsureSMBSchema(); err != nil {
+		log.Fatalf("Ensure SMB Schema error: %v", err)
+	}
 	if err := database.RunSeed("database/seed.sql"); err != nil {
 		log.Printf("notice: %v", err)
 	}
+	usersmodule.AfterUserChanged = smbmodule.ApplyConfig
 	jobsmodule.StartWorker()
+	cloudmonitor.StartWorker()
 
 	mux := http.NewServeMux()
 	filesHandler := filesmodule.NewHandler()
 	jobsHandler := jobsmodule.NewHandler()
+	smbHandler := smbmodule.NewHandler()
 	storagePoolHandler := storagepool.NewHandler()
 	systemHandler := systemmodule.NewHandler()
+	usersHandler := usersmodule.NewHandler()
 
 	mux.HandleFunc("GET /api/v1/storages/{storage}/files", filesHandler.HandleList)
 	mux.HandleFunc("GET /api/v1/storages", systemHandler.HandleStorageList)
@@ -86,6 +99,15 @@ func newRouter() http.Handler {
 	mux.HandleFunc("POST /api/v1/jobs/{jobId}/pause", jobsHandler.HandlePause)
 	mux.HandleFunc("POST /api/v1/jobs/{jobId}/resume", jobsHandler.HandleResume)
 	mux.HandleFunc("POST /api/v1/jobs/{jobId}/cancel", jobsHandler.HandleCancel)
+	mux.HandleFunc("GET /api/v1/users", usersHandler.HandleList)
+	mux.HandleFunc("POST /api/v1/users", usersHandler.HandleCreate)
+	mux.HandleFunc("PUT /api/v1/users/{userId}", usersHandler.HandleUpdate)
+	mux.HandleFunc("DELETE /api/v1/users/{userId}", usersHandler.HandleDelete)
+	mux.HandleFunc("GET /api/v1/smb/shares", smbHandler.HandleListShares)
+	mux.HandleFunc("POST /api/v1/smb/shares", smbHandler.HandleCreateShare)
+	mux.HandleFunc("PUT /api/v1/smb/shares/{shareId}", smbHandler.HandleUpdateShare)
+	mux.HandleFunc("DELETE /api/v1/smb/shares/{shareId}", smbHandler.HandleDeleteShare)
+	mux.HandleFunc("POST /api/v1/smb/apply", smbHandler.HandleApply)
 
 	return cors(mux)
 }
@@ -93,7 +115,7 @@ func newRouter() http.Handler {
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, HEAD, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, HEAD, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Tus-Resumable, Upload-Length, Upload-Offset, Upload-Metadata")
 		w.Header().Set("Access-Control-Expose-Headers", "Location, Upload-Offset, Upload-Length, Tus-Resumable, Tus-Version, Tus-Extension, Tus-Max-Size")
 		if strings.HasPrefix(r.URL.Path, "/api/v1/uploads/tus") || strings.HasPrefix(r.URL.Path, "/api/v1/upload2") {

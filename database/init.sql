@@ -119,6 +119,47 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_status_created_at ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_type_created_at ON jobs(type, created_at);
 
+CREATE TABLE IF NOT EXISTS users (
+    id             TEXT PRIMARY KEY,
+    username       TEXT NOT NULL UNIQUE,
+    display_name   TEXT DEFAULT '',
+    is_admin       INTEGER DEFAULT 0,
+    avatar         TEXT DEFAULT '',
+    password_hash  TEXT NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'active',
+    smb_username   TEXT NOT NULL UNIQUE,
+    smb_status     TEXT NOT NULL DEFAULT 'disabled',
+    smb_synced_at  DATETIME,
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at     DATETIME
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+CREATE INDEX IF NOT EXISTS idx_users_smb_status ON users(smb_status);
+
+CREATE TABLE IF NOT EXISTS smb_shares (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL UNIQUE,
+    storage_pool_id TEXT NOT NULL,
+    path            TEXT NOT NULL,
+    enabled         INTEGER DEFAULT 1,
+    browseable      INTEGER DEFAULT 1,
+    read_only       INTEGER DEFAULT 0,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS smb_share_users (
+    share_id    TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (share_id, user_id),
+    FOREIGN KEY (share_id) REFERENCES smb_shares(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_smb_share_users_user_id ON smb_share_users(user_id);
+
 -- Favorites table
 CREATE TABLE IF NOT EXISTS favorites (
     id           TEXT PRIMARY KEY,

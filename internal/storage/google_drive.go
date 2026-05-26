@@ -42,6 +42,7 @@ const (
 )
 
 type GoogleDriveConnectRequest struct {
+	StorageID          string `json:"storageId"`
 	Name               string `json:"name"`
 	RootPath           string `json:"rootPath"`
 	Scope              string `json:"scope"`
@@ -66,6 +67,7 @@ type GoogleDriveCallbackResponse struct {
 }
 
 type googleDriveOAuthState struct {
+	StorageID          string
 	Name               string
 	RootPath           string
 	Scope              string
@@ -189,6 +191,7 @@ func StartGoogleDriveOAuth(r *http.Request, req GoogleDriveConnectRequest) (*Goo
 	expiresAt := time.Now().Add(10 * time.Minute)
 	googleDriveStateStore.mu.Lock()
 	googleDriveStateStore.items[state] = googleDriveOAuthState{
+		StorageID:          strings.TrimSpace(req.StorageID),
 		Name:               strings.TrimSpace(req.Name),
 		RootPath:           normalizeGoogleDriveRootPath(req.RootPath),
 		Scope:              scope,
@@ -238,7 +241,7 @@ func CompleteGoogleDriveOAuth(ctx context.Context, code string, state string) (*
 		return nil, stateData.FailureRedirectURL, err
 	}
 
-	storageID, item, err := createGoogleDriveStorage(stateData, tokenResp, accountEmail)
+	storageID, item, err := createOrReconnectGoogleDriveStorage(ctx, stateData, tokenResp, accountEmail)
 	if err != nil {
 		return nil, stateData.FailureRedirectURL, err
 	}
@@ -415,6 +418,77 @@ func createGoogleDriveStorage(stateData googleDriveOAuthState, tokenResp *google
 	return storageID, item, nil
 }
 
+func createOrReconnectGoogleDriveStorage(ctx context.Context, stateData googleDriveOAuthState, tokenResp *googleDriveTokenResponse, accountEmail string) (string, Storage, error) {
+	if strings.TrimSpace(stateData.StorageID) == "" {
+		return createGoogleDriveStorage(stateData, tokenResp, accountEmail)
+	}
+	return reconnectGoogleDriveStorage(ctx, stateData, tokenResp, accountEmail)
+}
+
+func reconnectGoogleDriveStorage(ctx context.Context, stateData googleDriveOAuthState, tokenResp *googleDriveTokenResponse, accountEmail string) (string, Storage, error) {
+	storageID := strings.TrimSpace(stateData.StorageID)
+	item, err := Get(storageID)
+	if err != nil {
+		return "", Storage{}, fmt.Errorf("load google drive storage for reconnect: %w", err)
+	}
+	if item == nil || item.Provider != string(ProviderGoogleDrive) {
+		return "", Storage{}, fmt.Errorf("google drive storage not found")
+	}
+
+	if strings.TrimSpace(item.RootPath) == "" {
+		item.RootPath = normalizeGoogleDriveRootPath(stateData.RootPath)
+	}
+	if strings.TrimSpace(item.MountPath) == "" {
+		item.MountPath = googleDriveMountPath(storageID)
+	}
+	item.Username = strings.TrimSpace(accountEmail)
+	item.Status = StatusOnline
+	item.ExtraConfig = BuildExtraConfig(map[string]any{
+		"backend":          "drive",
+		"provider":         string(ProviderGoogleDrive),
+		"rcloneRemoteName": googleDriveRemoteName(storageID),
+		"scope":            firstNonEmpty(strings.TrimSpace(tokenResp.Scope), stateData.Scope),
+		"rootPath":         item.RootPath,
+		"redirectURL":      stateData.RedirectURL,
+	})
+
+	if err := UpdateIdentity(storageID, item.Username); err != nil {
+		return "", Storage{}, fmt.Errorf("update google drive account identity: %w", err)
+	}
+	if err := UpdateRuntime(storageID, item.MountPath, item.Status, item.TotalSize, item.FreeSize, item.ExtraConfig); err != nil {
+		return "", Storage{}, fmt.Errorf("update google drive runtime config: %w", err)
+	}
+
+	expiry := tokenExpiryString(tokenResp)
+	rawJSON, _ := json.Marshal(map[string]any{
+		"access_token":  tokenResp.AccessToken,
+		"refresh_token": tokenResp.RefreshToken,
+		"token_type":    tokenResp.TokenType,
+		"scope":         tokenResp.Scope,
+		"expiry":        expiry,
+	})
+	if _, err := UpsertToken(Token{
+		StorageID:    storageID,
+		TokenType:    tokenResp.TokenType,
+		AccessToken:  tokenResp.AccessToken,
+		RefreshToken: tokenResp.RefreshToken,
+		Expiry:       stringPtr(expiry),
+		Scope:        firstNonEmpty(strings.TrimSpace(tokenResp.Scope), stateData.Scope),
+		RawJSON:      string(rawJSON),
+	}); err != nil {
+		return "", Storage{}, fmt.Errorf("save google drive token: %w", err)
+	}
+
+	token, err := GetTokenByStorageID(storageID)
+	if err != nil || token == nil {
+		return "", Storage{}, fmt.Errorf("load google drive token for mount: %w", err)
+	}
+	if err := EnsureGoogleDriveMounted(ctx, item, token); err != nil {
+		return "", Storage{}, err
+	}
+	return storageID, *item, nil
+}
+
 func EnsureGoogleDriveMounted(ctx context.Context, item *Storage, token *Token) error {
 	if item == nil || token == nil || item.Provider != string(ProviderGoogleDrive) {
 		return nil
@@ -425,10 +499,10 @@ func EnsureGoogleDriveMounted(ctx context.Context, item *Storage, token *Token) 
 		item.MountPath = desiredMountPath
 	}
 
-	if err := ensureGoogleDriveMountPath(ctx, item.MountPath); err != nil {
+	if err := ensureGoogleDriveMountRoot(ctx); err != nil {
 		_ = UpdateRuntime(item.ID, item.MountPath, StatusError, item.TotalSize, item.FreeSize, item.ExtraConfig)
 		item.Status = StatusError
-		return fmt.Errorf("prepare google drive mount path: %w", err)
+		return fmt.Errorf("prepare google drive mount root: %w", err)
 	}
 
 	if err := upsertGoogleDriveRcloneConfig(*item, *token); err != nil {
@@ -437,7 +511,8 @@ func EnsureGoogleDriveMounted(ctx context.Context, item *Storage, token *Token) 
 		return fmt.Errorf("write google drive rclone config: %w", err)
 	}
 
-	if isGoogleDriveMounted(ctx, item.MountPath) {
+	mounted, shareable := googleDriveMountStatus(ctx, item.MountPath)
+	if mounted && shareable {
 		if item.MountPath != desiredMountPath || item.Status != StatusOnline {
 			if err := UpdateRuntime(item.ID, desiredMountPath, StatusOnline, item.TotalSize, item.FreeSize, item.ExtraConfig); err == nil {
 				item.MountPath = desiredMountPath
@@ -445,6 +520,19 @@ func EnsureGoogleDriveMounted(ctx context.Context, item *Storage, token *Token) 
 			}
 		}
 		return nil
+	}
+	if mounted && !shareable {
+		if err := unmountGoogleDrive(ctx, item.MountPath); err != nil {
+			_ = UpdateRuntime(item.ID, item.MountPath, StatusError, item.TotalSize, item.FreeSize, item.ExtraConfig)
+			item.Status = StatusError
+			return fmt.Errorf("remount google drive with smb access: %w", err)
+		}
+	}
+
+	if err := ensureGoogleDriveMountPath(ctx, item.MountPath); err != nil {
+		_ = UpdateRuntime(item.ID, item.MountPath, StatusError, item.TotalSize, item.FreeSize, item.ExtraConfig)
+		item.Status = StatusError
+		return fmt.Errorf("prepare google drive mount path: %w", err)
 	}
 
 	remote := googleDriveRemoteName(item.ID) + ":"
@@ -556,7 +644,8 @@ func RefreshGoogleDriveUsage(ctx context.Context, item *Storage) (*CloudUsage, e
 	}
 	item.TotalSize = usage.TotalBytes
 	item.FreeSize = usage.FreeBytes
-	if err := UpdateRuntime(item.ID, item.MountPath, item.Status, usage.TotalBytes, usage.FreeBytes, item.ExtraConfig); err != nil {
+	item.Status = StatusOnline
+	if err := UpdateRuntime(item.ID, item.MountPath, StatusOnline, usage.TotalBytes, usage.FreeBytes, item.ExtraConfig); err != nil {
 		return usage, fmt.Errorf("update google drive usage: %w", err)
 	}
 	return usage, nil
@@ -1353,19 +1442,34 @@ func ensureGoogleDriveMountPath(ctx context.Context, mountPath string) error {
 	if strings.TrimSpace(mountPath) == "" {
 		return fmt.Errorf("mount path is required")
 	}
-	if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "mkdir", "-p", defaultGoogleDriveMountRoot); err != nil {
+	if err := ensureGoogleDriveMountRoot(ctx); err != nil {
 		return err
 	}
-	if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "chmod", "0777", defaultGoogleDriveMountRoot); err != nil {
-		return err
+	if result, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "mkdir", "-p", mountPath); err != nil {
+		return fmt.Errorf("create google drive mount path %s: %w%s", mountPath, err, commandStderrSuffix(result.Stderr))
 	}
-	if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "mkdir", "-p", mountPath); err != nil {
-		return err
-	}
-	if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "chmod", "0777", mountPath); err != nil {
-		return err
+	if result, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "chmod", "0777", mountPath); err != nil {
+		return fmt.Errorf("chmod google drive mount path %s: %w%s", mountPath, err, commandStderrSuffix(result.Stderr))
 	}
 	return nil
+}
+
+func ensureGoogleDriveMountRoot(ctx context.Context) error {
+	if result, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "mkdir", "-p", defaultGoogleDriveMountRoot); err != nil {
+		return fmt.Errorf("create google drive mount root %s: %w%s", defaultGoogleDriveMountRoot, err, commandStderrSuffix(result.Stderr))
+	}
+	if result, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "chmod", "0777", defaultGoogleDriveMountRoot); err != nil {
+		return fmt.Errorf("chmod google drive mount root %s: %w%s", defaultGoogleDriveMountRoot, err, commandStderrSuffix(result.Stderr))
+	}
+	return nil
+}
+
+func commandStderrSuffix(stderr string) string {
+	stderr = strings.TrimSpace(stderr)
+	if stderr == "" {
+		return ""
+	}
+	return ": " + stderr
 }
 
 func upsertGoogleDriveRcloneConfig(item Storage, token Token) error {
@@ -1439,17 +1543,32 @@ func upsertINISection(content string, sectionName string, replacement string) st
 }
 
 func isGoogleDriveMounted(ctx context.Context, mountPath string) bool {
+	mounted, _ := googleDriveMountStatus(ctx, mountPath)
+	return mounted
+}
+
+func googleDriveMountStatus(ctx context.Context, mountPath string) (bool, bool) {
 	result, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{}, "mount")
 	if err != nil {
-		return false
+		return false, false
 	}
 	needle := " on " + mountPath + " "
 	for _, line := range strings.Split(result.Stdout, "\n") {
 		if strings.Contains(line, needle) {
-			return true
+			return true, strings.Contains(line, "allow_other")
 		}
 	}
-	return false
+	return false, false
+}
+
+func unmountGoogleDrive(ctx context.Context, mountPath string) error {
+	if strings.TrimSpace(mountPath) == "" {
+		return fmt.Errorf("mount path is required")
+	}
+	if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "umount", mountPath); err != nil {
+		return fmt.Errorf("unmount google drive %s: %w", mountPath, err)
+	}
+	return nil
 }
 
 func mountGoogleDrive(ctx context.Context, remote string, mountPath string) error {
@@ -1462,6 +1581,9 @@ func mountGoogleDrive(ctx context.Context, remote string, mountPath string) erro
 		mountPath,
 		"--config", defaultGoogleDriveRcloneFilePath,
 		"--daemon",
+		"--daemon-timeout", "15s",
+		"--allow-other",
+		"--umask", "000",
 		"--vfs-cache-mode", "writes",
 		"--dir-cache-time", "1m",
 		"--poll-interval", "30s",

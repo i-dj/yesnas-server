@@ -47,6 +47,12 @@ var preferredCommandPaths = map[string][]string{
 	"dd":         {"/usr/bin/dd", "/bin/dd"},
 	"sync":       {"/usr/bin/sync", "/bin/sync"},
 	"rclone":     {"/usr/bin/rclone", "/usr/local/bin/rclone", "/bin/rclone"},
+	"id":         {"/usr/bin/id", "/bin/id"},
+	"useradd":    {"/usr/sbin/useradd", "/sbin/useradd", "/usr/bin/useradd"},
+	"usermod":    {"/usr/sbin/usermod", "/sbin/usermod", "/usr/bin/usermod"},
+	"smbpasswd":  {"/usr/bin/smbpasswd", "/usr/sbin/smbpasswd", "/bin/smbpasswd"},
+	"testparm":   {"/usr/bin/testparm", "/usr/sbin/testparm", "/bin/testparm"},
+	"systemctl":  {"/usr/bin/systemctl", "/bin/systemctl"},
 	"mkfs.btrfs": {"/usr/sbin/mkfs.btrfs", "/sbin/mkfs.btrfs", "/usr/bin/mkfs.btrfs"},
 	"btrfs":      {"/usr/bin/btrfs", "/bin/btrfs"},
 }
