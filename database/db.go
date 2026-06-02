@@ -160,46 +160,24 @@ func EnsureUsersSchema() error {
 		"avatar":        "TEXT DEFAULT ''",
 		"password_hash": "TEXT DEFAULT ''",
 		"status":        "TEXT NOT NULL DEFAULT 'active'",
-		"smb_username":  "TEXT DEFAULT ''",
-		"smb_status":    "TEXT NOT NULL DEFAULT 'disabled'",
-		"smb_synced_at": "DATETIME",
 	}); err != nil {
 		return err
 	}
-	return migrateUserSMBUsernames()
+	return nil
 }
 
-func EnsureSMBSchema() error {
+func EnsureFileShareSchema() error {
 	if DB == nil {
 		return fmt.Errorf("database is not initialized; call InitDB first")
 	}
-	if err := ensureColumns("smb_shares", map[string]string{
+	if err := ensureColumns("file_shares", map[string]string{
 		"storage_pool_id": "TEXT DEFAULT ''",
-		"enabled":         "INTEGER DEFAULT 1",
-		"browseable":      "INTEGER DEFAULT 1",
-		"read_only":       "INTEGER DEFAULT 0",
+		"protocols":       "TEXT DEFAULT '[]'",
+		"user_ids":        "TEXT DEFAULT '[]'",
+		"client_networks": "TEXT DEFAULT '[]'",
+		"status":          "TEXT NOT NULL DEFAULT 'enabled'",
 	}); err != nil {
 		return err
-	}
-	return ensureColumns("smb_share_users", map[string]string{})
-}
-
-func migrateUserSMBUsernames() error {
-	if _, err := DB.Exec(`
-		UPDATE users
-		SET smb_username = lower(username),
-		    smb_status = 'disabled',
-		    smb_synced_at = NULL,
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE (smb_username = '' OR smb_username = 'yn_' || lower(username))
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM users AS other
-		    WHERE other.id <> users.id
-		      AND other.smb_username = lower(users.username)
-		  )
-	`); err != nil {
-		return fmt.Errorf("migrate user smb usernames: %w", err)
 	}
 	return nil
 }

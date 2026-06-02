@@ -9,7 +9,7 @@ import (
 	cloudmonitor "nas-server/internal/cloudmonitor"
 	filesmodule "nas-server/internal/files"
 	jobsmodule "nas-server/internal/jobs"
-	smbmodule "nas-server/internal/smb"
+	sharingmodule "nas-server/internal/sharing"
 	storagepool "nas-server/internal/storagepool"
 	systemmodule "nas-server/internal/system"
 	usersmodule "nas-server/internal/users"
@@ -18,7 +18,7 @@ import (
 type Router struct{}
 
 func newRouter() http.Handler {
-	if err := database.InitDB("data/nas.db"); err != nil {
+	if err := database.InitDB("data/nas1.db"); err != nil {
 		log.Fatalf("Init DB error: %v", err)
 	}
 	database.DB.Exec("PRAGMA foreign_keys = ON;")
@@ -43,20 +43,19 @@ func newRouter() http.Handler {
 	if err := database.EnsureUsersSchema(); err != nil {
 		log.Fatalf("Ensure Users Schema error: %v", err)
 	}
-	if err := database.EnsureSMBSchema(); err != nil {
-		log.Fatalf("Ensure SMB Schema error: %v", err)
+	if err := database.EnsureFileShareSchema(); err != nil {
+		log.Fatalf("Ensure File Share Schema error: %v", err)
 	}
 	if err := database.RunSeed("database/seed.sql"); err != nil {
 		log.Printf("notice: %v", err)
 	}
-	usersmodule.AfterUserChanged = smbmodule.ApplyConfig
 	jobsmodule.StartWorker()
 	cloudmonitor.StartWorker()
 
 	mux := http.NewServeMux()
 	filesHandler := filesmodule.NewHandler()
 	jobsHandler := jobsmodule.NewHandler()
-	smbHandler := smbmodule.NewHandler()
+	sharingHandler := sharingmodule.NewHandler()
 	storagePoolHandler := storagepool.NewHandler()
 	systemHandler := systemmodule.NewHandler()
 	usersHandler := usersmodule.NewHandler()
@@ -67,6 +66,10 @@ func newRouter() http.Handler {
 	mux.HandleFunc("POST /api/v1/storages/google-drive/connect", systemHandler.HandleStartGoogleDriveConnect)
 	mux.HandleFunc("GET /api/v1/storages/google-drive/callback", systemHandler.HandleGoogleDriveCallback)
 	mux.HandleFunc("GET /api/v1/system/disks", systemHandler.HandleSystemDisks)
+	mux.HandleFunc("GET /api/v1/system/status", systemHandler.HandleSystemStatus)
+	mux.HandleFunc("GET /api/v1/system/status/stream", systemHandler.HandleSystemStatusStream)
+	mux.HandleFunc("GET /api/v1/system/network", systemHandler.HandleNetworkInterfaces)
+	mux.HandleFunc("GET /api/v1/system/network/stream", systemHandler.HandleNetworkInterfacesStream)
 	mux.HandleFunc("GET /api/v1/system/raid/candidates", systemHandler.HandleRaidCandidates)
 	mux.HandleFunc("GET /api/v1/system/storage-pools", storagePoolHandler.HandleListPools)
 	mux.HandleFunc("POST /api/v1/system/storage-pools", storagePoolHandler.HandleCreatePool)
@@ -103,11 +106,14 @@ func newRouter() http.Handler {
 	mux.HandleFunc("POST /api/v1/users", usersHandler.HandleCreate)
 	mux.HandleFunc("PUT /api/v1/users/{userId}", usersHandler.HandleUpdate)
 	mux.HandleFunc("DELETE /api/v1/users/{userId}", usersHandler.HandleDelete)
-	mux.HandleFunc("GET /api/v1/smb/shares", smbHandler.HandleListShares)
-	mux.HandleFunc("POST /api/v1/smb/shares", smbHandler.HandleCreateShare)
-	mux.HandleFunc("PUT /api/v1/smb/shares/{shareId}", smbHandler.HandleUpdateShare)
-	mux.HandleFunc("DELETE /api/v1/smb/shares/{shareId}", smbHandler.HandleDeleteShare)
-	mux.HandleFunc("POST /api/v1/smb/apply", smbHandler.HandleApply)
+	mux.HandleFunc("GET /api/v1/file-shares", sharingHandler.HandleList)
+	mux.HandleFunc("POST /api/v1/file-shares", sharingHandler.HandleCreate)
+	mux.HandleFunc("GET /api/v1/file-shares/summary", sharingHandler.HandleSummary)
+	mux.HandleFunc("GET /api/v1/file-shares/protocols", sharingHandler.HandleProtocolServices)
+	mux.HandleFunc("POST /api/v1/file-shares/protocols/{protocol}/action", sharingHandler.HandleProtocolServiceAction)
+	mux.HandleFunc("GET /api/v1/file-shares/{shareId}", sharingHandler.HandleGet)
+	mux.HandleFunc("PUT /api/v1/file-shares/{shareId}", sharingHandler.HandleUpdate)
+	mux.HandleFunc("DELETE /api/v1/file-shares/{shareId}", sharingHandler.HandleDelete)
 
 	return cors(mux)
 }

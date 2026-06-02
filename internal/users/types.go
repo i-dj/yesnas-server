@@ -3,16 +3,8 @@ package users
 type Status string
 
 const (
-	StatusActive   Status = "active"
+	StatusActive   Status = "enabled"
 	StatusDisabled Status = "disabled"
-)
-
-type SMBStatus string
-
-const (
-	SMBStatusDisabled SMBStatus = "disabled"
-	SMBStatusActive   SMBStatus = "active"
-	SMBStatusError    SMBStatus = "error"
 )
 
 type User struct {
@@ -23,9 +15,6 @@ type User struct {
 	Avatar       string  `db:"avatar" json:"avatar"`
 	PasswordHash string  `db:"password_hash" json:"-"`
 	Status       string  `db:"status" json:"status"`
-	SMBUsername  string  `db:"smb_username" json:"smbUsername"`
-	SMBStatus    string  `db:"smb_status" json:"smbStatus"`
-	SMBSyncedAt  *string `db:"smb_synced_at" json:"smbSyncedAt,omitempty"`
 	CreatedAt    string  `db:"created_at" json:"createdAt"`
 	UpdatedAt    *string `db:"updated_at" json:"updatedAt,omitempty"`
 }

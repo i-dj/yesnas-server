@@ -73,13 +73,11 @@ func Create(req CreateRequest) (*User, string, error) {
 		Avatar:       normalizeAvatar(req.Avatar),
 		PasswordHash: passwordHash,
 		Status:       status,
-		SMBUsername:  SMBUsernameFor(username),
-		SMBStatus:    string(SMBStatusDisabled),
 		CreatedAt:    now,
 	}
 	_, err = database.DB.Exec(
-		`INSERT INTO users (id, username, display_name, is_admin, avatar, password_hash, status, smb_username, smb_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		item.ID, item.Username, item.DisplayName, item.IsAdmin, item.Avatar, item.PasswordHash, item.Status, item.SMBUsername, item.SMBStatus, now, now,
+		`INSERT INTO users (id, username, display_name, is_admin, avatar, password_hash, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		item.ID, item.Username, item.DisplayName, item.IsAdmin, item.Avatar, item.PasswordHash, item.Status, now, now,
 	)
 	if err != nil {
 		return nil, "", fmt.Errorf("create user: %w", err)
@@ -132,22 +130,12 @@ func Update(id string, req UpdateRequest) (*User, string, error) {
 	return updated, plainPassword, err
 }
 
-func UpdateSMBState(userID string, smbStatus SMBStatus) error {
-	now := time.Now().Format(time.RFC3339)
-	_, err := database.DB.Exec(`UPDATE users SET smb_status = ?, smb_synced_at = ?, updated_at = ? WHERE id = ?`, string(smbStatus), now, now, userID)
-	return err
-}
-
 func Delete(id string) error {
 	_, err := database.DB.Exec(`DELETE FROM users WHERE id = ?`, strings.TrimSpace(id))
 	return err
 }
 
-func SMBUsernameFor(username string) string {
-	return strings.ToLower(strings.TrimSpace(username))
-}
-
-const userSelectSQL = `SELECT id, username, COALESCE(display_name, '') AS display_name, COALESCE(is_admin, 0) AS is_admin, COALESCE(avatar, '') AS avatar, password_hash, status, COALESCE(smb_username, '') AS smb_username, COALESCE(smb_status, 'disabled') AS smb_status, smb_synced_at, created_at, updated_at FROM users`
+const userSelectSQL = `SELECT id, username, COALESCE(display_name, '') AS display_name, COALESCE(is_admin, 0) AS is_admin, COALESCE(avatar, '') AS avatar, password_hash, status, created_at, updated_at FROM users`
 
 func normalizeUsername(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
