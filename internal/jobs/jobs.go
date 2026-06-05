@@ -23,7 +23,8 @@ import (
 type Type string
 
 const (
-	TypeCloudSync Type = "cloud_sync"
+	TypeCloudSync    Type = "cloud_sync"
+	TypeAutoSnapshot Type = "auto_snapshot"
 )
 
 type Status string
@@ -47,7 +48,7 @@ type Job struct {
 	ID            string  `db:"id" json:"id"`
 	Type          string  `db:"type" json:"type"`
 	Status        string  `db:"status" json:"status"`
-	Title         string  `db:"title" json:"-"`
+	Title         string  `db:"title" json:"title"`
 	StoragePoolID string  `db:"storage_id" json:"storagePoolId"`
 	ResourceType  string  `db:"resource_type" json:"resourceType"`
 	ResourceID    string  `db:"resource_id" json:"resourceId"`
@@ -62,11 +63,67 @@ type Job struct {
 	FinishedAt    *string `db:"finished_at" json:"finishedAt,omitempty"`
 }
 
+type JobListQuery struct {
+	Page     int
+	PageSize int
+	Status   string
+	Search   string
+}
+
+type JobListItem struct {
+	Job
+	StoragePoolName string `json:"storagePoolName,omitempty"`
+	Schedule        string `json:"schedule,omitempty"`
+}
+
+type JobListCounts struct {
+	All       int `json:"all"`
+	Pending   int `json:"pending"`
+	Running   int `json:"running"`
+	Paused    int `json:"paused"`
+	Success   int `json:"success"`
+	Failed    int `json:"failed"`
+	Cancelled int `json:"cancelled"`
+}
+
+type JobListPagination struct {
+	Page       int `json:"page"`
+	PageSize   int `json:"pageSize"`
+	Total      int `json:"total"`
+	TotalPages int `json:"totalPages"`
+}
+
+type JobListResponse struct {
+	Items      []JobListItem     `json:"items"`
+	Pagination JobListPagination `json:"pagination"`
+	Counts     JobListCounts     `json:"counts"`
+}
+
+type ScheduledTask struct {
+	ID              string  `json:"id"`
+	Type            string  `json:"type"`
+	Action          string  `json:"action"`
+	Status          string  `json:"status"`
+	Enabled         bool    `json:"enabled"`
+	Schedule        string  `json:"schedule"`
+	NextRunAt       *string `json:"nextRunAt,omitempty"`
+	LastRunAt       *string `json:"lastRunAt,omitempty"`
+	StoragePoolID   string  `json:"storagePoolId"`
+	StoragePoolName string  `json:"storagePoolName"`
+	ResourceType    string  `json:"resourceType"`
+	ResourceID      string  `json:"resourceId"`
+}
+
 type CloudSyncPayload struct {
 	LocalPath   string `json:"localPath"`
 	TargetPath  string `json:"targetPath"`
 	ContentType string `json:"contentType"`
 	FileName    string `json:"fileName"`
+}
+
+type AutoSnapshotPayload struct {
+	PoolID   string `json:"poolId"`
+	Schedule string `json:"schedule"`
 }
 
 type Handler struct{}
@@ -101,6 +158,7 @@ func StartWorker() {
 
 			for {
 				markStaleRunningJobs()
+				enqueueDueAutoSnapshotJobs()
 				processOnePendingJob()
 				<-ticker.C
 			}
@@ -178,14 +236,130 @@ func List(limit int) ([]Job, error) {
 	return items, err
 }
 
-func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
-	limit := 50
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		fmt.Sscanf(raw, "%d", &limit)
+func ListJobs(query JobListQuery) (*JobListResponse, error) {
+	markStaleRunningJobs()
+	page := query.Page
+	if page <= 0 {
+		page = 1
 	}
-	items, err := List(limit)
+	pageSize := query.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	status := normalizeListStatus(query.Status)
+	search := strings.TrimSpace(query.Search)
+	whereParts := []string{}
+	args := []any{}
+	if status != "" {
+		whereParts = append(whereParts, "status = ?")
+		args = append(args, status)
+	}
+	if search != "" {
+		like := "%" + search + "%"
+		whereParts = append(whereParts, "(title LIKE ? OR message LIKE ? OR error_message LIKE ? OR status LIKE ? OR type LIKE ?)")
+		args = append(args, like, like, like, like, like)
+	}
+
+	whereSQL := ""
+	if len(whereParts) > 0 {
+		whereSQL = " WHERE " + strings.Join(whereParts, " AND ")
+	}
+
+	var total int
+	countQuery := `SELECT COUNT(1) FROM jobs` + whereSQL
+	if err := database.DB.Get(&total, countQuery, args...); err != nil {
+		return nil, err
+	}
+
+	offset := (page - 1) * pageSize
+	listArgs := append(append([]any{}, args...), pageSize, offset)
+	rows := []Job{}
+	listQuery := `SELECT id, type, status, title, storage_id, resource_type, resource_id, progress, message, error_message, payload_json, result_json, created_at, updated_at, started_at, finished_at
+		FROM jobs` + whereSQL + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	if err := database.DB.Select(&rows, listQuery, listArgs...); err != nil {
+		return nil, err
+	}
+
+	items, err := buildJobListItems(rows)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := getJobCounts()
+	if err != nil {
+		return nil, err
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = (total + pageSize - 1) / pageSize
+	}
+	return &JobListResponse{
+		Items: items,
+		Pagination: JobListPagination{
+			Page:       page,
+			PageSize:   pageSize,
+			Total:      total,
+			TotalPages: totalPages,
+		},
+		Counts: counts,
+	}, nil
+}
+
+func ListScheduledTasks() ([]ScheduledTask, error) {
+	pools, err := storagepool.List()
+	if err != nil {
+		return nil, err
+	}
+	items := make([]ScheduledTask, 0, len(pools))
+	for _, pool := range pools {
+		if !pool.AutoSnapshotEnabled || strings.TrimSpace(pool.AutoSnapshotSchedule) == "" {
+			continue
+		}
+		items = append(items, ScheduledTask{
+			ID:              "auto_snapshot:" + pool.ID,
+			Type:            string(TypeAutoSnapshot),
+			Action:          "snapshot",
+			Status:          "scheduled",
+			Enabled:         true,
+			Schedule:        pool.AutoSnapshotSchedule,
+			NextRunAt:       formatOptionalTime(pool.NextAutoSnapshotAt),
+			LastRunAt:       formatOptionalTime(pool.LastAutoSnapshotAt),
+			StoragePoolID:   pool.ID,
+			StoragePoolName: pool.Name,
+			ResourceType:    "storage_pool",
+			ResourceID:      pool.ID,
+		})
+	}
+	return items, nil
+}
+
+func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
+	page := parsePositiveIntQuery(r, "page", 1)
+	pageSize := parsePositiveIntQuery(r, "pageSize", 20)
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		pageSize = parsePositiveInt(raw, pageSize)
+	}
+	result, err := ListJobs(JobListQuery{
+		Page:     page,
+		PageSize: pageSize,
+		Status:   r.URL.Query().Get("status"),
+		Search:   r.URL.Query().Get("q"),
+	})
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "JOBS_LIST_FAILED", "Failed to list jobs: "+err.Error())
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (h *Handler) HandleScheduledList(w http.ResponseWriter, r *http.Request) {
+	items, err := ListScheduledTasks()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "JOBS_SCHEDULED_LIST_FAILED", "Failed to list scheduled jobs: "+err.Error())
 		return
 	}
 	writeJSON(w, map[string]any{"items": items})
@@ -232,13 +406,13 @@ func (h *Handler) HandlePause(w http.ResponseWriter, r *http.Request) {
 
 	switch Status(item.Status) {
 	case StatusPending:
-		if err := updatePaused(item.ID, "Sync job paused"); err != nil {
+		if err := updatePaused(item.ID, pausedStatusMessage(Type(item.Type))); err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "JOB_PAUSE_FAILED", "Failed to pause job: "+err.Error())
 			return
 		}
 	case StatusRunning:
 		requestRunningJobStop(item.ID, jobStopReasonPause)
-		if err := updatePaused(item.ID, "Sync job paused"); err != nil {
+		if err := updatePaused(item.ID, pausedStatusMessage(Type(item.Type))); err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "JOB_PAUSE_FAILED", "Failed to pause job: "+err.Error())
 			return
 		}
@@ -271,7 +445,7 @@ func (h *Handler) HandleResume(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusConflict, "JOB_CACHE_MISSING", err.Error())
 		return
 	}
-	if err := updateResume(item.ID); err != nil {
+	if err := updateResume(item.ID, Type(item.Type)); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "JOB_RESUME_FAILED", "Failed to resume job: "+err.Error())
 		return
 	}
@@ -330,8 +504,10 @@ func processOnePendingJob() {
 	switch Type(item.Type) {
 	case TypeCloudSync:
 		runCloudSyncJob(item)
+	case TypeAutoSnapshot:
+		runAutoSnapshotJob(item)
 	default:
-		_ = updateFailure(item.ID, "Unsupported job type")
+		_ = updateFailure(item.ID, "Unsupported job type", "Job failed")
 	}
 }
 
@@ -343,9 +519,10 @@ func claimNextPendingJob() (*Job, bool) {
 	}
 
 	now := time.Now().Format(time.RFC3339)
+	runningMessage := runningMessageForType(Type(item.Type))
 	result, err := database.DB.Exec(
 		`UPDATE jobs SET status = ?, progress = ?, message = ?, started_at = ?, updated_at = ? WHERE id = ? AND status = ?`,
-		string(StatusRunning), 5, "Syncing to cloud storage", now, now, item.ID, string(StatusPending),
+		string(StatusRunning), 5, runningMessage, now, now, item.ID, string(StatusPending),
 	)
 	if err != nil {
 		return nil, false
@@ -356,7 +533,7 @@ func claimNextPendingJob() (*Job, bool) {
 	}
 	item.Status = string(StatusRunning)
 	item.Progress = 5
-	item.Message = "Syncing to cloud storage"
+	item.Message = runningMessage
 	item.StartedAt = stringPtr(now)
 	item.UpdatedAt = now
 	return &item, true
@@ -376,10 +553,11 @@ func markStaleRunningJobs() {
 			continue
 		}
 		message := fmt.Sprintf("Job heartbeat timed out; the backend has not updated this job for more than %s. The job may have stopped or the service may have restarted.", runningJobStaleAfter)
+		statusMessage := failureStatusMessage(Type(item.Type))
 		now := time.Now().Format(time.RFC3339)
 		result, err := database.DB.Exec(
 			`UPDATE jobs SET status = ?, message = ?, error_message = ?, finished_at = ?, updated_at = ? WHERE id = ? AND status = ?`,
-			string(StatusFailed), "Sync job stopped", message, now, now, item.ID, string(StatusRunning),
+			string(StatusFailed), statusMessage, message, now, now, item.ID, string(StatusRunning),
 		)
 		if err != nil {
 			log.Printf("[JOBS] mark stale running job failed id=%s err=%v", item.ID, err)
@@ -402,7 +580,7 @@ func runCloudSyncJob(item *Job) {
 	var payload CloudSyncPayload
 	if err := json.Unmarshal([]byte(item.PayloadJSON), &payload); err != nil {
 		log.Printf("[JOBS] decode payload failed id=%s err=%v", item.ID, err)
-		_ = updateFailure(item.ID, "Failed to decode sync job payload: "+err.Error())
+		_ = updateFailure(item.ID, "Failed to decode sync job payload: "+err.Error(), failureStatusMessage(TypeCloudSync))
 		return
 	}
 	log.Printf("[JOBS] cloud sync start id=%s storagePool=%s local=%s target=%s", item.ID, item.StoragePoolID, payload.LocalPath, payload.TargetPath)
@@ -410,7 +588,7 @@ func runCloudSyncJob(item *Job) {
 	storageRecord, err := resolveCloudSyncStorage(item.StoragePoolID)
 	if err != nil || storageRecord == nil {
 		log.Printf("[JOBS] cloud sync storage missing id=%s storagePool=%s err=%v", item.ID, item.StoragePoolID, err)
-		_ = updateFailure(item.ID, "Cloud storage not found")
+		_ = updateFailure(item.ID, "Cloud storage not found", failureStatusMessage(TypeCloudSync))
 		cleanupCloudSyncLocalPayload(item.ID, payload)
 		return
 	}
@@ -418,7 +596,7 @@ func runCloudSyncJob(item *Job) {
 	file, err := os.Open(payload.LocalPath)
 	if err != nil {
 		log.Printf("[JOBS] cloud sync open local failed id=%s path=%s err=%v", item.ID, payload.LocalPath, err)
-		_ = updateFailure(item.ID, "Failed to open local cache file: "+err.Error())
+		_ = updateFailure(item.ID, "Failed to open local cache file: "+err.Error(), failureStatusMessage(TypeCloudSync))
 		cleanupCloudSyncLocalPayload(item.ID, payload)
 		return
 	}
@@ -438,7 +616,7 @@ func runCloudSyncJob(item *Job) {
 			_ = file.Close()
 			switch stopReason {
 			case jobStopReasonPause:
-				_ = updatePaused(item.ID, "Sync job paused")
+				_ = updatePaused(item.ID, pausedStatusMessage(TypeCloudSync))
 			case jobStopReasonCancel:
 				cleanupCloudSyncLocalPayload(item.ID, payload)
 				_ = updateCancelled(item.ID, "Job cancelled")
@@ -446,7 +624,7 @@ func runCloudSyncJob(item *Job) {
 				cleanupCloudSyncLocalPayload(item.ID, payload)
 				_ = deleteJob(item.ID)
 			default:
-				_ = updateFailure(item.ID, "Sync job was interrupted")
+				_ = updateFailure(item.ID, "Sync job was interrupted", failureStatusMessage(TypeCloudSync))
 			}
 			return
 		}
@@ -459,7 +637,7 @@ func runCloudSyncJob(item *Job) {
 			return
 		}
 		log.Printf("[JOBS] cloud sync upload failed id=%s storagePool=%s target=%s err=%v", item.ID, item.StoragePoolID, payload.TargetPath, err)
-		_ = updateFailure(item.ID, "Failed to upload to Google Drive: "+err.Error())
+		_ = updateFailure(item.ID, "Failed to upload to Google Drive: "+err.Error(), failureStatusMessage(TypeCloudSync))
 		_ = file.Close()
 		cleanupCloudSyncLocalPayload(item.ID, payload)
 		return
@@ -477,7 +655,174 @@ func runCloudSyncJob(item *Job) {
 	_ = updateSuccess(item.ID, map[string]any{
 		"targetPath": payload.TargetPath,
 		"fileName":   payload.FileName,
+	}, successStatusMessage(TypeCloudSync))
+}
+
+func enqueueDueAutoSnapshotJobs() {
+	pools, err := storagepool.List()
+	if err != nil {
+		log.Printf("[JOBS] list auto snapshot pools failed err=%v", err)
+		return
+	}
+	now := time.Now()
+	for _, pool := range pools {
+		if !pool.AutoSnapshotEnabled || strings.TrimSpace(pool.AutoSnapshotSchedule) == "" || pool.NextAutoSnapshotAt == nil {
+			continue
+		}
+		if pool.NextAutoSnapshotAt.After(now) {
+			continue
+		}
+		exists, err := hasPendingOrRunningAutoSnapshotJob(pool.ID)
+		if err != nil {
+			log.Printf("[JOBS] check auto snapshot pending job failed pool=%s err=%v", pool.ID, err)
+			continue
+		}
+		if exists {
+			continue
+		}
+		next := nextAutoSnapshotAfter(pool.NextAutoSnapshotAt, pool.AutoSnapshotSchedule, now)
+		if err := storagepool.UpdateAutoSnapshotQueued(pool.ID, next); err != nil {
+			log.Printf("[JOBS] update auto snapshot queued failed pool=%s err=%v", pool.ID, err)
+			continue
+		}
+		if _, err := enqueueAutoSnapshotJob(pool, now); err != nil {
+			log.Printf("[JOBS] enqueue auto snapshot job failed pool=%s err=%v", pool.ID, err)
+			continue
+		}
+	}
+}
+
+func enqueueAutoSnapshotJob(pool storagepool.StoragePool, now time.Time) (*Job, error) {
+	payload := AutoSnapshotPayload{
+		PoolID:   pool.ID,
+		Schedule: pool.AutoSnapshotSchedule,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode auto snapshot payload failed: %w", err)
+	}
+	item := &Job{
+		ID:            idgen.New(),
+		Type:          string(TypeAutoSnapshot),
+		Status:        string(StatusPending),
+		Title:         "Automatic snapshot",
+		StoragePoolID: pool.ID,
+		ResourceType:  "storage_pool",
+		ResourceID:    pool.ID,
+		Progress:      0,
+		Message:       "Waiting to create automatic snapshot",
+		PayloadJSON:   string(payloadJSON),
+		CreatedAt:     now.Format(time.RFC3339),
+		UpdatedAt:     now.Format(time.RFC3339),
+	}
+	_, err = database.DB.Exec(
+		`INSERT INTO jobs (id, type, status, title, storage_id, resource_type, resource_id, progress, message, error_message, payload_json, result_json, created_at, updated_at, started_at, finished_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		item.ID, item.Type, item.Status, item.Title, item.StoragePoolID, item.ResourceType, item.ResourceID, item.Progress, item.Message, item.ErrorMessage, item.PayloadJSON, item.ResultJSON, item.CreatedAt, item.UpdatedAt, item.StartedAt, item.FinishedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("[JOBS] enqueued id=%s type=%s pool=%s schedule=%s", item.ID, item.Type, pool.ID, pool.AutoSnapshotSchedule)
+	return item, nil
+}
+
+func hasPendingOrRunningAutoSnapshotJob(poolID string) (bool, error) {
+	var count int
+	if err := database.DB.Get(&count, `SELECT COUNT(1) FROM jobs WHERE type = ? AND resource_id = ? AND status IN (?, ?)`, string(TypeAutoSnapshot), poolID, string(StatusPending), string(StatusRunning)); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func nextAutoSnapshotAfter(lastScheduledAt *time.Time, schedule string, now time.Time) time.Time {
+	base := now
+	if lastScheduledAt != nil && !lastScheduledAt.IsZero() {
+		base = *lastScheduledAt
+	}
+	next := storagepool.NextAutoSnapshotTime(base, schedule)
+	for !next.After(now) {
+		next = storagepool.NextAutoSnapshotTime(next, schedule)
+	}
+	return next
+}
+
+func runAutoSnapshotJob(item *Job) {
+	startedAt := time.Now()
+	var payload AutoSnapshotPayload
+	if err := json.Unmarshal([]byte(item.PayloadJSON), &payload); err != nil {
+		log.Printf("[JOBS] decode auto snapshot payload failed id=%s err=%v", item.ID, err)
+		_ = updateFailure(item.ID, "Failed to decode auto snapshot payload: "+err.Error(), failureStatusMessage(TypeAutoSnapshot))
+		return
+	}
+
+	pool, err := storagepool.Get(strings.TrimSpace(payload.PoolID))
+	if err != nil {
+		log.Printf("[JOBS] auto snapshot pool missing id=%s pool=%s err=%v", item.ID, payload.PoolID, err)
+		_ = updateFailure(item.ID, "Storage pool not found", failureStatusMessage(TypeAutoSnapshot))
+		return
+	}
+	if !pool.AutoSnapshotEnabled || strings.TrimSpace(pool.AutoSnapshotSchedule) == "" {
+		log.Printf("[JOBS] auto snapshot disabled id=%s pool=%s", item.ID, pool.ID)
+		_ = updateFailure(item.ID, "Automatic snapshot is disabled for this storage pool", failureStatusMessage(TypeAutoSnapshot))
+		return
+	}
+
+	_ = updateProgress(item.ID, 25, "Creating automatic snapshot")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	unregisterRunningJob := registerRunningJob(item.ID, cancel)
+	stopHeartbeat := startJobHeartbeat(item.ID)
+	snapshot, err := storagepool.CreateSnapshot(ctx, pool, storagepool.CreateSnapshotRequest{
+		Name:        autoSnapshotName(payload.Schedule, startedAt),
+		Description: fmt.Sprintf("automatic %s snapshot", strings.TrimSpace(payload.Schedule)),
+		CreatedBy:   "auto-snapshot",
 	})
+	stopHeartbeat()
+	stopReason := unregisterRunningJob()
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			switch stopReason {
+			case jobStopReasonPause:
+				_ = updatePaused(item.ID, pausedStatusMessage(TypeAutoSnapshot))
+			case jobStopReasonCancel:
+				_ = updateCancelled(item.ID, "Job cancelled")
+			case jobStopReasonDelete:
+				_ = deleteJob(item.ID)
+			default:
+				_ = updateFailure(item.ID, "Automatic snapshot was interrupted", failureStatusMessage(TypeAutoSnapshot))
+			}
+			return
+		}
+		log.Printf("[JOBS] auto snapshot failed id=%s pool=%s err=%v", item.ID, pool.ID, err)
+		_ = updateFailure(item.ID, "Failed to create automatic snapshot: "+err.Error(), failureStatusMessage(TypeAutoSnapshot))
+		return
+	}
+
+	if status := currentJobStatus(item.ID); status != StatusRunning {
+		return
+	}
+
+	completedAt := time.Now()
+	next := storagepool.NextAutoSnapshotTime(completedAt, pool.AutoSnapshotSchedule)
+	if err := storagepool.UpdateAutoSnapshotSuccess(pool.ID, completedAt, next); err != nil {
+		log.Printf("[JOBS] auto snapshot metadata update failed id=%s pool=%s err=%v", item.ID, pool.ID, err)
+		_ = updateFailure(item.ID, "Snapshot created but failed to update auto snapshot schedule: "+err.Error(), failureStatusMessage(TypeAutoSnapshot))
+		return
+	}
+
+	log.Printf("[JOBS] auto snapshot success id=%s pool=%s snapshot=%s duration=%s", item.ID, pool.ID, snapshot.Name, time.Since(startedAt))
+	_ = updateSuccess(item.ID, map[string]any{
+		"poolId":     pool.ID,
+		"schedule":   pool.AutoSnapshotSchedule,
+		"snapshotId": snapshot.MetadataID,
+		"name":       snapshot.Name,
+		"path":       snapshot.Path,
+	}, successStatusMessage(TypeAutoSnapshot))
+}
+
+func autoSnapshotName(schedule string, now time.Time) string {
+	return fmt.Sprintf("auto-%s-%s", strings.TrimSpace(schedule), now.In(time.Local).Format("20060102-150405"))
 }
 
 func startJobHeartbeat(jobID string) func() {
@@ -622,11 +967,11 @@ func updatePaused(jobID string, message string) error {
 	return err
 }
 
-func updateResume(jobID string) error {
+func updateResume(jobID string, jobType Type) error {
 	now := time.Now().Format(time.RFC3339)
 	_, err := database.DB.Exec(
 		`UPDATE jobs SET status = ?, progress = ?, message = ?, error_message = '', finished_at = NULL, updated_at = ? WHERE id = ? AND status = ?`,
-		string(StatusPending), 0, "Waiting to sync", now, jobID, string(StatusPaused),
+		string(StatusPending), 0, pendingStatusMessage(jobType), now, jobID, string(StatusPaused),
 	)
 	return err
 }
@@ -640,11 +985,11 @@ func updateCancelled(jobID string, message string) error {
 	return err
 }
 
-func updateFailure(jobID string, message string) error {
+func updateFailure(jobID string, message string, statusMessage string) error {
 	now := time.Now().Format(time.RFC3339)
 	_, err := database.DB.Exec(
 		`UPDATE jobs SET status = ?, progress = ?, message = ?, error_message = ?, finished_at = ?, updated_at = ? WHERE id = ? AND status = ?`,
-		string(StatusFailed), 100, "Sync failed", message, now, now, jobID, string(StatusRunning),
+		string(StatusFailed), 100, statusMessage, message, now, now, jobID, string(StatusRunning),
 	)
 	return err
 }
@@ -654,14 +999,178 @@ func deleteJob(jobID string) error {
 	return err
 }
 
-func updateSuccess(jobID string, result any) error {
+func updateSuccess(jobID string, result any, statusMessage string) error {
 	encoded, _ := json.Marshal(result)
 	now := time.Now().Format(time.RFC3339)
 	_, err := database.DB.Exec(
 		`UPDATE jobs SET status = ?, progress = ?, message = ?, result_json = ?, error_message = '', finished_at = ?, updated_at = ? WHERE id = ? AND status = ?`,
-		string(StatusSuccess), 100, "Sync completed", string(encoded), now, now, jobID, string(StatusRunning),
+		string(StatusSuccess), 100, statusMessage, string(encoded), now, now, jobID, string(StatusRunning),
 	)
 	return err
+}
+
+func pendingStatusMessage(jobType Type) string {
+	switch jobType {
+	case TypeAutoSnapshot:
+		return "Waiting to create automatic snapshot"
+	default:
+		return "Waiting to sync"
+	}
+}
+
+func runningMessageForType(jobType Type) string {
+	switch jobType {
+	case TypeAutoSnapshot:
+		return "Creating automatic snapshot"
+	default:
+		return "Syncing to cloud storage"
+	}
+}
+
+func pausedStatusMessage(jobType Type) string {
+	switch jobType {
+	case TypeAutoSnapshot:
+		return "Automatic snapshot paused"
+	default:
+		return "Sync job paused"
+	}
+}
+
+func successStatusMessage(jobType Type) string {
+	switch jobType {
+	case TypeAutoSnapshot:
+		return "Automatic snapshot completed"
+	default:
+		return "Sync completed"
+	}
+}
+
+func failureStatusMessage(jobType Type) string {
+	switch jobType {
+	case TypeAutoSnapshot:
+		return "Automatic snapshot failed"
+	default:
+		return "Sync failed"
+	}
+}
+
+func buildJobListItems(rows []Job) ([]JobListItem, error) {
+	poolMap, err := loadStoragePoolNameMap()
+	if err != nil {
+		return nil, err
+	}
+	items := make([]JobListItem, 0, len(rows))
+	for i := range rows {
+		normalizeJobForResponse(&rows[i])
+		item := JobListItem{Job: rows[i]}
+		if item.Type == string(TypeAutoSnapshot) {
+			var payload AutoSnapshotPayload
+			if err := json.Unmarshal([]byte(rows[i].PayloadJSON), &payload); err == nil {
+				item.Schedule = payload.Schedule
+				if item.StoragePoolID == "" {
+					item.StoragePoolID = payload.PoolID
+				}
+			}
+		}
+		if poolName := resolveJobStoragePoolName(poolMap, item.Job); poolName != "" {
+			item.StoragePoolName = poolName
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func loadStoragePoolNameMap() (map[string]string, error) {
+	pools, err := storagepool.List()
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]string, len(pools))
+	for _, pool := range pools {
+		result[pool.ID] = pool.Name
+		if strings.TrimSpace(pool.StorageID) != "" {
+			result[pool.StorageID] = pool.Name
+		}
+	}
+	return result, nil
+}
+
+func resolveJobStoragePoolName(poolMap map[string]string, job Job) string {
+	if name := strings.TrimSpace(poolMap[strings.TrimSpace(job.StoragePoolID)]); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(poolMap[strings.TrimSpace(job.ResourceID)]); name != "" {
+		return name
+	}
+	return ""
+}
+
+func getJobCounts() (JobListCounts, error) {
+	type countsRow struct {
+		All       int `db:"all_count"`
+		Pending   int `db:"pending_count"`
+		Running   int `db:"running_count"`
+		Paused    int `db:"paused_count"`
+		Success   int `db:"success_count"`
+		Failed    int `db:"failed_count"`
+		Cancelled int `db:"cancelled_count"`
+	}
+	var row countsRow
+	err := database.DB.Get(&row, `SELECT
+		COUNT(1) AS all_count,
+		COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count,
+		COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running_count,
+		COALESCE(SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END), 0) AS paused_count,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
+		COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_count,
+		COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled_count
+		FROM jobs`)
+	if err != nil {
+		return JobListCounts{}, err
+	}
+	return JobListCounts{
+		All:       row.All,
+		Pending:   row.Pending,
+		Running:   row.Running,
+		Paused:    row.Paused,
+		Success:   row.Success,
+		Failed:    row.Failed,
+		Cancelled: row.Cancelled,
+	}, nil
+}
+
+func normalizeListStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "all":
+		return ""
+	case string(StatusPending), string(StatusRunning), string(StatusPaused), string(StatusSuccess), string(StatusFailed), string(StatusCancelled):
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func parsePositiveIntQuery(r *http.Request, key string, fallback int) int {
+	return parsePositiveInt(strings.TrimSpace(r.URL.Query().Get(key)), fallback)
+}
+
+func parsePositiveInt(raw string, fallback int) int {
+	if raw == "" {
+		return fallback
+	}
+	var value int
+	if _, err := fmt.Sscanf(raw, "%d", &value); err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func formatOptionalTime(value *time.Time) *string {
+	if value == nil || value.IsZero() {
+		return nil
+	}
+	formatted := value.Format(time.RFC3339)
+	return &formatted
 }
 
 func stringPtr(value string) *string {

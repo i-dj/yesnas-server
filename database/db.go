@@ -109,6 +109,10 @@ func EnsureStoragePoolSchema() error {
 	}
 	if err := ensureColumns("storage_pool", map[string]string{
 		"data_path":                 "TEXT DEFAULT ''",
+		"auto_snapshot_enabled":     "INTEGER DEFAULT 0",
+		"auto_snapshot_schedule":    "TEXT DEFAULT ''",
+		"last_auto_snapshot_at":     "DATETIME",
+		"next_auto_snapshot_at":     "DATETIME",
 		"read_speed_bytes_per_sec":  "REAL DEFAULT 0",
 		"write_speed_bytes_per_sec": "REAL DEFAULT 0",
 		"speed_tested_at":           "DATETIME",

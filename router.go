@@ -7,6 +7,7 @@ import (
 
 	"nas-server/database"
 	cloudmonitor "nas-server/internal/cloudmonitor"
+	dockermodule "nas-server/internal/docker"
 	filesmodule "nas-server/internal/files"
 	jobsmodule "nas-server/internal/jobs"
 	sharingmodule "nas-server/internal/sharing"
@@ -54,6 +55,7 @@ func newRouter() http.Handler {
 
 	mux := http.NewServeMux()
 	filesHandler := filesmodule.NewHandler()
+	dockerHandler := dockermodule.NewHandler()
 	jobsHandler := jobsmodule.NewHandler()
 	sharingHandler := sharingmodule.NewHandler()
 	storagePoolHandler := storagepool.NewHandler()
@@ -68,6 +70,8 @@ func newRouter() http.Handler {
 	mux.HandleFunc("GET /api/v1/system/disks", systemHandler.HandleSystemDisks)
 	mux.HandleFunc("GET /api/v1/system/status", systemHandler.HandleSystemStatus)
 	mux.HandleFunc("GET /api/v1/system/status/stream", systemHandler.HandleSystemStatusStream)
+	mux.HandleFunc("GET /api/v1/system/hardware", systemHandler.HandleHardware)
+	mux.HandleFunc("GET /api/v1/system/hardware/stream", systemHandler.HandleHardwareStream)
 	mux.HandleFunc("GET /api/v1/system/network", systemHandler.HandleNetworkInterfaces)
 	mux.HandleFunc("GET /api/v1/system/network/stream", systemHandler.HandleNetworkInterfacesStream)
 	mux.HandleFunc("GET /api/v1/system/raid/candidates", systemHandler.HandleRaidCandidates)
@@ -97,11 +101,14 @@ func newRouter() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/uploads/tus/{uploadId}", filesHandler.HandleTusPatch)
 	mux.HandleFunc("DELETE /api/v1/uploads/tus/{uploadId}", filesHandler.HandleTusDelete)
 	mux.HandleFunc("GET /api/v1/jobs", jobsHandler.HandleList)
+	mux.HandleFunc("GET /api/v1/jobs/scheduled", jobsHandler.HandleScheduledList)
 	mux.HandleFunc("GET /api/v1/jobs/{jobId}", jobsHandler.HandleGet)
 	mux.HandleFunc("DELETE /api/v1/jobs/{jobId}", jobsHandler.HandleDelete)
 	mux.HandleFunc("POST /api/v1/jobs/{jobId}/pause", jobsHandler.HandlePause)
 	mux.HandleFunc("POST /api/v1/jobs/{jobId}/resume", jobsHandler.HandleResume)
 	mux.HandleFunc("POST /api/v1/jobs/{jobId}/cancel", jobsHandler.HandleCancel)
+	mux.HandleFunc("GET /api/v1/docker/containers", dockerHandler.HandleListContainers)
+	mux.HandleFunc("GET /api/v1/docker/containers/stream", dockerHandler.HandleListContainersStream)
 	mux.HandleFunc("GET /api/v1/users", usersHandler.HandleList)
 	mux.HandleFunc("POST /api/v1/users", usersHandler.HandleCreate)
 	mux.HandleFunc("PUT /api/v1/users/{userId}", usersHandler.HandleUpdate)

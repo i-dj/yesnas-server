@@ -1,15 +1,16 @@
 package system
 
 type SystemStatusSnapshot struct {
-	Status       SystemHealthStatus `json:"status"`
-	SystemDisk   DiskStatus         `json:"systemDisk"`
-	Network      NetworkStatus      `json:"network"`
-	FileSharing  FileSharingStatus  `json:"fileSharing"`
-	CPU          CPUStatus          `json:"cpu"`
-	Memory       MemoryStatus       `json:"memory"`
-	GPU          *GPUStatus         `json:"gpu,omitempty"`
-	TopProcesses []MonitoredProcess `json:"topProcesses"`
-	CheckedAt    string             `json:"checkedAt"`
+	Status      SystemHealthStatus `json:"status"`
+	SystemDisk  DiskStatus         `json:"systemDisk"`
+	Load        SystemLoadStatus   `json:"load"`
+	DiskIO      DiskIOStatus       `json:"diskIo"`
+	Network     NetworkStatus      `json:"network"`
+	FileSharing FileSharingStatus  `json:"fileSharing"`
+	CPU         CPUStatus          `json:"cpu"`
+	Memory      MemoryStatus       `json:"memory"`
+	GPU         *GPUStatus         `json:"gpu,omitempty"`
+	CheckedAt   string             `json:"checkedAt"`
 }
 
 type SystemHealthStatus struct {
@@ -24,6 +25,17 @@ type DiskStatus struct {
 	FreeBytes    uint64  `json:"freeBytes"`
 	UsagePercent float64 `json:"usagePercent"`
 	Health       string  `json:"health"`
+}
+
+type SystemLoadStatus struct {
+	Load1  float64 `json:"load1"`
+	Load5  float64 `json:"load5"`
+	Load15 float64 `json:"load15"`
+}
+
+type DiskIOStatus struct {
+	ReadBytesPerSec  int64 `json:"readBytesPerSec"`
+	WriteBytesPerSec int64 `json:"writeBytesPerSec"`
 }
 
 type NetworkStatus struct {
@@ -59,6 +71,10 @@ type MemoryStatus struct {
 	AvailableBytes  uint64  `json:"availableBytes"`
 	UsagePercent    float64 `json:"usagePercent"`
 	PressurePercent float64 `json:"pressurePercent"`
+	Type            string  `json:"type"`
+	SpeedMHz        *int    `json:"speedMHz"`
+	Manufacturer    string  `json:"manufacturer"`
+	PartNumber      string  `json:"partNumber"`
 }
 
 type GPUStatus struct {
@@ -68,11 +84,4 @@ type GPUStatus struct {
 	MemoryUsedBytes  uint64   `json:"memoryUsedBytes"`
 	MemoryTotalBytes uint64   `json:"memoryTotalBytes"`
 	PowerW           *float64 `json:"powerW,omitempty"`
-}
-
-type MonitoredProcess struct {
-	Name        string  `json:"name"`
-	CPUPercent  float64 `json:"cpuPercent"`
-	MemoryBytes uint64  `json:"memoryBytes"`
-	Status      string  `json:"status"`
 }

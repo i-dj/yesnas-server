@@ -34,6 +34,10 @@ func CreatePool(ctx context.Context, req CreateRequest) (*StoragePool, error) {
 	if err := ValidateName(strings.TrimSpace(req.Name)); err != nil {
 		return nil, err
 	}
+	autoSnapshotSchedule, err := normalizeAutoSnapshot(req.AutoSnapshotEnabled, req.AutoSnapshotSchedule)
+	if err != nil {
+		return nil, err
+	}
 	if len(req.CacheDiskPaths) > 0 {
 		return nil, fmt.Errorf("cache disk is not supported for btrfs pools yet")
 	}
@@ -106,14 +110,18 @@ func CreatePool(ctx context.Context, req CreateRequest) (*StoragePool, error) {
 	}
 
 	now := time.Now()
+	nextAutoSnapshotAt := initialAutoSnapshotNextRun(req.AutoSnapshotEnabled, autoSnapshotSchedule, now)
 	pool := StoragePool{
-		StorageID:  storageID,
-		Name:       req.Name,
-		Filesystem: "btrfs",
-		RaidLevel:  raidLevel,
-		MountPath:  mountPath,
-		DataPath:   dataPath,
-		UpdatedAt:  &now,
+		StorageID:            storageID,
+		Name:                 req.Name,
+		Filesystem:           "btrfs",
+		RaidLevel:            raidLevel,
+		MountPath:            mountPath,
+		DataPath:             dataPath,
+		AutoSnapshotEnabled:  req.AutoSnapshotEnabled,
+		AutoSnapshotSchedule: autoSnapshotSchedule,
+		NextAutoSnapshotAt:   nextAutoSnapshotAt,
+		UpdatedAt:            &now,
 	}
 	if err := Add(pool, poolDevices); err != nil {
 		return nil, fmt.Errorf("create storage pool record: %w", err)
@@ -129,6 +137,41 @@ func CreatePool(ctx context.Context, req CreateRequest) (*StoragePool, error) {
 		}
 	}
 	return nil, fmt.Errorf("storage pool created but failed to reload")
+}
+
+func normalizeAutoSnapshot(enabled bool, schedule string) (string, error) {
+	if !enabled {
+		return "", nil
+	}
+	value := AutoSnapshotSchedule(strings.ToLower(strings.TrimSpace(schedule)))
+	switch value {
+	case AutoSnapshotScheduleHourly, AutoSnapshotScheduleDaily, AutoSnapshotScheduleMonthly:
+		return string(value), nil
+	default:
+		return "", fmt.Errorf("auto snapshot schedule must be one of: hourly, daily, monthly")
+	}
+}
+
+func initialAutoSnapshotNextRun(enabled bool, schedule string, now time.Time) *time.Time {
+	if !enabled || strings.TrimSpace(schedule) == "" {
+		return nil
+	}
+	next := NextAutoSnapshotTime(now, schedule)
+	return &next
+}
+
+func NextAutoSnapshotTime(from time.Time, schedule string) time.Time {
+	base := from.In(time.Local)
+	switch AutoSnapshotSchedule(strings.ToLower(strings.TrimSpace(schedule))) {
+	case AutoSnapshotScheduleHourly:
+		return base.Truncate(time.Hour).Add(time.Hour)
+	case AutoSnapshotScheduleDaily:
+		return time.Date(base.Year(), base.Month(), base.Day()+1, 0, 0, 0, 0, base.Location())
+	case AutoSnapshotScheduleMonthly:
+		return time.Date(base.Year(), base.Month()+1, 1, 0, 0, 0, 0, base.Location())
+	default:
+		return base.Add(time.Hour)
+	}
 }
 
 func normalizeRaidLevel(value string) (string, error) {

@@ -3,11 +3,21 @@ package storagepool
 import "time"
 
 type CreateRequest struct {
-	Name           string   `json:"name"`
-	RaidLevel      string   `json:"raidLevel"`
-	DevicePaths    []string `json:"paths"`
-	CacheDiskPaths []string `json:"cacheDiskPaths,omitempty"`
+	Name                 string   `json:"name"`
+	RaidLevel            string   `json:"raidLevel"`
+	DevicePaths          []string `json:"paths"`
+	CacheDiskPaths       []string `json:"cacheDiskPaths,omitempty"`
+	AutoSnapshotEnabled  bool     `json:"autoSnapshotEnabled,omitempty"`
+	AutoSnapshotSchedule string   `json:"autoSnapshotSchedule,omitempty"`
 }
+
+type AutoSnapshotSchedule string
+
+const (
+	AutoSnapshotScheduleHourly  AutoSnapshotSchedule = "hourly"
+	AutoSnapshotScheduleDaily   AutoSnapshotSchedule = "daily"
+	AutoSnapshotScheduleMonthly AutoSnapshotSchedule = "monthly"
+)
 
 type DeleteRequest struct {
 	WipeDevices bool `json:"wipeDevices"`
@@ -32,11 +42,12 @@ type CreateSnapshotRequest struct {
 	SourcePath  string `json:"sourcePath,omitempty"`
 	Description string `json:"description,omitempty"`
 	ReadOnly    *bool  `json:"readOnly,omitempty"`
+	CreatedBy   string `json:"-"`
 }
 
 type RestoreSnapshotRequest struct {
 	Password     string `json:"password"`
-	CreateBackup bool `json:"createBackup,omitempty"`
+	CreateBackup bool   `json:"createBackup,omitempty"`
 }
 
 type LSBLKResponse struct {

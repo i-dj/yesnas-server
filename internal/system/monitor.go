@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -25,6 +24,11 @@ type networkSample struct {
 	tx int64
 }
 
+type diskIOSample struct {
+	readBytes  int64
+	writeBytes int64
+}
+
 func CollectSystemStatus(ctx context.Context, sampleInterval time.Duration) (SystemStatusSnapshot, error) {
 	if sampleInterval <= 0 {
 		sampleInterval = time.Second
@@ -35,6 +39,7 @@ func CollectSystemStatus(ctx context.Context, sampleInterval time.Duration) (Sys
 
 	cpuBefore := readCPUSample()
 	netBefore := readNetworkSample()
+	diskBefore := readDiskIOSample()
 	select {
 	case <-ctx.Done():
 		return SystemStatusSnapshot{}, ctx.Err()
@@ -42,17 +47,19 @@ func CollectSystemStatus(ctx context.Context, sampleInterval time.Duration) (Sys
 	}
 	cpuAfter := readCPUSample()
 	netAfter := readNetworkSample()
+	diskAfter := readDiskIOSample()
 
 	status := SystemStatusSnapshot{
-		Status:       collectHealthStatus(),
-		SystemDisk:   collectSystemDisk(),
-		Network:      buildNetworkStatus(netBefore, netAfter, sampleInterval),
-		FileSharing:  collectFileSharingStatus(),
-		CPU:          collectCPUStatus(cpuBefore, cpuAfter),
-		Memory:       collectMemoryStatus(),
-		GPU:          collectGPUStatus(ctx),
-		TopProcesses: collectTopProcesses(ctx),
-		CheckedAt:    time.Now().Format(time.RFC3339),
+		Status:      collectHealthStatus(),
+		SystemDisk:  collectSystemDisk(),
+		Load:        collectSystemLoad(),
+		DiskIO:      buildDiskIOStatus(diskBefore, diskAfter, sampleInterval),
+		Network:     buildNetworkStatus(netBefore, netAfter, sampleInterval),
+		FileSharing: collectFileSharingStatus(),
+		CPU:         collectCPUStatus(cpuBefore, cpuAfter),
+		Memory:      collectMemoryStatus(),
+		GPU:         collectGPUStatus(ctx),
+		CheckedAt:   time.Now().Format(time.RFC3339),
 	}
 	return status, nil
 }
@@ -87,6 +94,22 @@ func collectSystemDisk() DiskStatus {
 		FreeBytes:    free,
 		UsagePercent: usagePercent,
 		Health:       health,
+	}
+}
+
+func collectSystemLoad() SystemLoadStatus {
+	content, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return SystemLoadStatus{}
+	}
+	fields := strings.Fields(string(content))
+	if len(fields) < 3 {
+		return SystemLoadStatus{}
+	}
+	return SystemLoadStatus{
+		Load1:  round1(parseFloatDefault(fields[0], 0)),
+		Load5:  round1(parseFloatDefault(fields[1], 0)),
+		Load15: round1(parseFloatDefault(fields[2], 0)),
 	}
 }
 
@@ -226,13 +249,150 @@ func collectMemoryStatus() MemoryStatus {
 	if pressure == 0 {
 		pressure = usagePercent
 	}
+	memoryType, speedMHz, manufacturer, partNumber := readMemoryHardwareInfo()
 	return MemoryStatus{
 		TotalBytes:      total,
 		UsedBytes:       used,
 		AvailableBytes:  available,
 		UsagePercent:    usagePercent,
 		PressurePercent: round1(pressure),
+		Type:            memoryType,
+		SpeedMHz:        speedMHz,
+		Manufacturer:    manufacturer,
+		PartNumber:      partNumber,
 	}
+}
+
+func readMemoryHardwareInfo() (string, *int, string, string) {
+	if memoryType, speedMHz, manufacturer, partNumber := readMemoryHardwareInfoFromDMI(); memoryType != "" || speedMHz != nil || manufacturer != "" || partNumber != "" {
+		return memoryType, speedMHz, manufacturer, partNumber
+	}
+	return "", nil, "", ""
+}
+
+func readMemoryHardwareInfoFromDMI() (string, *int, string, string) {
+	output, err := runMemoryInfoCommand(
+		[]string{"sudo", "-n", "dmidecode", "-t", "memory"},
+		[]string{"dmidecode", "-t", "memory"},
+	)
+	if err != nil || strings.TrimSpace(output) == "" {
+		return "", nil, "", ""
+	}
+	return parseDMIMemoryInfo(output)
+}
+
+func runMemoryInfoCommand(commands ...[]string) (string, error) {
+	for _, parts := range commands {
+		if len(parts) == 0 {
+			continue
+		}
+		path, err := exec.LookPath(parts[0])
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(path, parts[1:]...)
+		output, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+		return string(output), nil
+	}
+	return "", os.ErrNotExist
+}
+
+func parseDMIMemoryInfo(content string) (string, *int, string, string) {
+	memoryType := ""
+	speeds := map[int]int{}
+	manufacturers := map[string]int{}
+	partNumbers := map[string]int{}
+	inDevice := false
+	for _, rawLine := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "Memory Device" {
+			inDevice = true
+			continue
+		}
+		if line == "" {
+			inDevice = false
+			continue
+		}
+		if !inDevice {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "Type:"):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "Type:"))
+			if value != "" && value != "Unknown" && value != "RAM" && memoryType == "" {
+				memoryType = value
+			}
+		case strings.HasPrefix(line, "Manufacturer:"):
+			addMemoryTextCount(manufacturers, strings.TrimSpace(strings.TrimPrefix(line, "Manufacturer:")))
+		case strings.HasPrefix(line, "Part Number:"):
+			addMemoryTextCount(partNumbers, strings.TrimSpace(strings.TrimPrefix(line, "Part Number:")))
+		case strings.HasPrefix(line, "Configured Memory Speed:"):
+			addMemorySpeedCount(speeds, strings.TrimSpace(strings.TrimPrefix(line, "Configured Memory Speed:")))
+		case strings.HasPrefix(line, "Speed:"):
+			addMemorySpeedCount(speeds, strings.TrimSpace(strings.TrimPrefix(line, "Speed:")))
+		}
+	}
+	return memoryType, mostCommonMemorySpeed(speeds), mostCommonMemoryText(manufacturers), mostCommonMemoryText(partNumbers)
+}
+
+func addMemorySpeedCount(speeds map[int]int, raw string) {
+	if raw == "" || raw == "Unknown" {
+		return
+	}
+	fields := strings.Fields(raw)
+	if len(fields) == 0 {
+		return
+	}
+	value, err := strconv.Atoi(fields[0])
+	if err != nil || value <= 0 {
+		return
+	}
+	speeds[value]++
+}
+
+func addMemoryTextCount(values map[string]int, raw string) {
+	value := strings.TrimSpace(raw)
+	if value == "" || value == "Unknown" || value == "Not Specified" || value == "NO DIMM" {
+		return
+	}
+	values[value]++
+}
+
+func mostCommonMemorySpeed(speeds map[int]int) *int {
+	if len(speeds) == 0 {
+		return nil
+	}
+	bestValue := 0
+	bestCount := -1
+	for value, count := range speeds {
+		if count > bestCount || (count == bestCount && value > bestValue) {
+			bestValue = value
+			bestCount = count
+		}
+	}
+	if bestValue <= 0 {
+		return nil
+	}
+	result := bestValue
+	return &result
+}
+
+func mostCommonMemoryText(values map[string]int) string {
+	if len(values) == 0 {
+		return ""
+	}
+	bestValue := ""
+	bestCount := -1
+	for value, count := range values {
+		if count > bestCount || (count == bestCount && (bestValue == "" || value < bestValue)) {
+			bestValue = value
+			bestCount = count
+		}
+	}
+	return bestValue
 }
 
 func readMemInfo() map[string]uint64 {
@@ -300,6 +460,55 @@ func readNetworkSample() networkSample {
 	return sample
 }
 
+func readDiskIOSample() diskIOSample {
+	content, err := os.ReadFile("/proc/diskstats")
+	if err != nil {
+		return diskIOSample{}
+	}
+	var sample diskIOSample
+	for _, line := range strings.Split(string(content), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 10 {
+			continue
+		}
+		name := fields[2]
+		if !includeDiskStatsDevice(name) {
+			continue
+		}
+		readSectors, err := strconv.ParseInt(fields[5], 10, 64)
+		if err != nil {
+			continue
+		}
+		writeSectors, err := strconv.ParseInt(fields[9], 10, 64)
+		if err != nil {
+			continue
+		}
+		sample.readBytes += readSectors * 512
+		sample.writeBytes += writeSectors * 512
+	}
+	return sample
+}
+
+func includeDiskStatsDevice(name string) bool {
+	switch {
+	case strings.HasPrefix(name, "loop"),
+		strings.HasPrefix(name, "ram"),
+		strings.HasPrefix(name, "zram"),
+		strings.HasPrefix(name, "fd"):
+		return false
+	case strings.HasPrefix(name, "nvme") && strings.Contains(name, "p"):
+		return false
+	case strings.HasPrefix(name, "mmcblk") && strings.Contains(name, "p"):
+		return false
+	}
+	last := name[len(name)-1]
+	if last >= '0' && last <= '9' &&
+		(strings.HasPrefix(name, "sd") || strings.HasPrefix(name, "vd") || strings.HasPrefix(name, "xvd")) {
+		return false
+	}
+	return true
+}
+
 func buildNetworkStatus(before, after networkSample, interval time.Duration) NetworkStatus {
 	seconds := interval.Seconds()
 	if seconds <= 0 {
@@ -316,6 +525,25 @@ func buildNetworkStatus(before, after networkSample, interval time.Duration) Net
 	return NetworkStatus{
 		DownloadBytesPerSec: download,
 		UploadBytesPerSec:   upload,
+	}
+}
+
+func buildDiskIOStatus(before, after diskIOSample, interval time.Duration) DiskIOStatus {
+	seconds := interval.Seconds()
+	if seconds <= 0 {
+		seconds = 1
+	}
+	read := int64(float64(after.readBytes-before.readBytes) / seconds)
+	write := int64(float64(after.writeBytes-before.writeBytes) / seconds)
+	if read < 0 {
+		read = 0
+	}
+	if write < 0 {
+		write = 0
+	}
+	return DiskIOStatus{
+		ReadBytesPerSec:  read,
+		WriteBytesPerSec: write,
 	}
 }
 
@@ -406,63 +634,6 @@ func collectGPUStatus(ctx context.Context) *GPUStatus {
 		PowerW:           power,
 	}
 	return status
-}
-
-func collectTopProcesses(ctx context.Context) []MonitoredProcess {
-	path, err := exec.LookPath("ps")
-	if err != nil {
-		return nil
-	}
-	cmd := exec.CommandContext(ctx, path, "-eo", "comm=,pcpu=,rss=,stat=", "--sort=-pcpu")
-	output, err := cmd.Output()
-	if err != nil {
-		return nil
-	}
-	var items []MonitoredProcess
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			continue
-		}
-		name := fields[0]
-		cpu := parseFloatDefault(fields[1], 0)
-		rssKiB := parseFloatDefault(fields[2], 0)
-		state := fields[3]
-		if name == "ps" || name == "go" {
-			continue
-		}
-		items = append(items, MonitoredProcess{
-			Name:        name,
-			CPUPercent:  round1(cpu),
-			MemoryBytes: uint64(rssKiB * 1024),
-			Status:      processStatus(state),
-		})
-		if len(items) >= 5 {
-			break
-		}
-	}
-	sort.SliceStable(items, func(i, j int) bool {
-		return items[i].CPUPercent > items[j].CPUPercent
-	})
-	return items
-}
-
-func processStatus(state string) string {
-	if strings.Contains(state, "R") {
-		return "running"
-	}
-	if strings.Contains(state, "S") || strings.Contains(state, "I") {
-		return "idle"
-	}
-	if strings.Contains(state, "D") {
-		return "waiting"
-	}
-	return "unknown"
 }
 
 func readFirstFloatFromGlob(patterns []string, divisor float64) *float64 {

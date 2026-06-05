@@ -146,7 +146,7 @@ func CreateSnapshot(ctx context.Context, pool *StoragePool, req CreateSnapshotRe
 		SourcePath:  sourcePath,
 		IsReadOnly:  readOnly,
 		Description: strings.TrimSpace(req.Description),
-		CreatedBy:   "api",
+		CreatedBy:   snapshotCreatedBy(req.CreatedBy),
 		UpdatedAt:   &now,
 	}
 	if err := AddSnapshot(meta); err != nil {
@@ -170,9 +170,17 @@ func CreateSnapshot(ctx context.Context, pool *StoragePool, req CreateSnapshotRe
 		Description: strings.TrimSpace(req.Description),
 		IsReadOnly:  readOnly,
 		Registered:  true,
-		CreatedBy:   "api",
+		CreatedBy:   snapshotCreatedBy(req.CreatedBy),
 		CreatedAt:   &createdAt,
 	}, nil
+}
+
+func snapshotCreatedBy(value string) string {
+	createdBy := strings.TrimSpace(value)
+	if createdBy == "" {
+		return "api"
+	}
+	return createdBy
 }
 
 func DeleteSnapshot(ctx context.Context, pool *StoragePool, snapshotID string) (map[string]any, error) {
