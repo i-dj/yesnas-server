@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"nas-server/database"
+	auditmodule "nas-server/internal/audit"
+	authmodule "nas-server/internal/auth"
 	cloudmonitor "nas-server/internal/cloudmonitor"
 	dockermodule "nas-server/internal/docker"
 	filesmodule "nas-server/internal/files"
@@ -44,6 +46,12 @@ func newRouter() http.Handler {
 	if err := database.EnsureUsersSchema(); err != nil {
 		log.Fatalf("Ensure Users Schema error: %v", err)
 	}
+	if err := database.EnsureUserSessionSchema(); err != nil {
+		log.Fatalf("Ensure User Session Schema error: %v", err)
+	}
+	if err := database.EnsureAuditLogSchema(); err != nil {
+		log.Fatalf("Ensure Audit Log Schema error: %v", err)
+	}
 	if err := database.EnsureFileShareSchema(); err != nil {
 		log.Fatalf("Ensure File Share Schema error: %v", err)
 	}
@@ -55,6 +63,8 @@ func newRouter() http.Handler {
 
 	mux := http.NewServeMux()
 	filesHandler := filesmodule.NewHandler()
+	auditHandler := auditmodule.NewHandler()
+	authHandler := authmodule.NewHandler()
 	dockerHandler := dockermodule.NewHandler()
 	jobsHandler := jobsmodule.NewHandler()
 	sharingHandler := sharingmodule.NewHandler()
@@ -63,6 +73,10 @@ func newRouter() http.Handler {
 	usersHandler := usersmodule.NewHandler()
 
 	mux.HandleFunc("GET /api/v1/storages/{storage}/files", filesHandler.HandleList)
+	mux.HandleFunc("POST /api/v1/auth/login", authHandler.HandleLogin)
+	mux.HandleFunc("POST /api/v1/auth/logout", authHandler.HandleLogout)
+	mux.HandleFunc("GET /api/v1/logs", auditHandler.HandleList)
+	mux.HandleFunc("GET /api/v1/logs/heatmap", auditHandler.HandleHeatmap)
 	mux.HandleFunc("GET /api/v1/storages", systemHandler.HandleStorageList)
 	mux.HandleFunc("GET /api/v1/storages/google-drive/connect", systemHandler.HandleStartGoogleDriveConnectRedirect)
 	mux.HandleFunc("POST /api/v1/storages/google-drive/connect", systemHandler.HandleStartGoogleDriveConnect)
@@ -122,14 +136,14 @@ func newRouter() http.Handler {
 	mux.HandleFunc("PUT /api/v1/file-shares/{shareId}", sharingHandler.HandleUpdate)
 	mux.HandleFunc("DELETE /api/v1/file-shares/{shareId}", sharingHandler.HandleDelete)
 
-	return cors(mux)
+	return cors(auditmodule.Middleware(authmodule.Middleware(mux)))
 }
 
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, HEAD, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Tus-Resumable, Upload-Length, Upload-Offset, Upload-Metadata")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, X-Auth-Token, Content-Type, Tus-Resumable, Upload-Length, Upload-Offset, Upload-Metadata")
 		w.Header().Set("Access-Control-Expose-Headers", "Location, Upload-Offset, Upload-Length, Tus-Resumable, Tus-Version, Tus-Extension, Tus-Max-Size")
 		if strings.HasPrefix(r.URL.Path, "/api/v1/uploads/tus") || strings.HasPrefix(r.URL.Path, "/api/v1/upload2") {
 			w.Header().Set("Tus-Resumable", "1.0.0")

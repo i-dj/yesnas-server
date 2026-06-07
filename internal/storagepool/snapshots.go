@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"nas-server/internal/audit"
 	"nas-server/internal/storage"
 	commandrunner "nas-server/pkg/shell"
 )
@@ -45,9 +46,15 @@ func (h *Handler) HandleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshot, err := CreateSnapshot(r.Context(), pool, req)
 	if err != nil {
+		audit.UserAction(r.Context(), "snapshot_create_failed", "create", false, "storage_pool_snapshot", pool.ID, pool.Name, err.Error(), nil)
 		writeAPIError(w, http.StatusBadRequest, "CREATE_STORAGE_POOL_SNAPSHOT_FAILED", err.Error())
 		return
 	}
+	audit.UserAction(r.Context(), "snapshot_created", "create", true, "storage_pool_snapshot", snapshot.MetadataID, snapshot.Name, "Snapshot created", map[string]any{
+		"poolId":   pool.ID,
+		"poolName": pool.Name,
+		"path":     snapshot.Path,
+	})
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, snapshot)
 }
@@ -60,9 +67,11 @@ func (h *Handler) HandleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := DeleteSnapshot(r.Context(), pool, strings.TrimSpace(r.PathValue("snapshotId")))
 	if err != nil {
+		audit.UserAction(r.Context(), "snapshot_delete_failed", "delete", false, "storage_pool_snapshot", r.PathValue("snapshotId"), pool.Name, err.Error(), nil)
 		writeAPIError(w, http.StatusBadRequest, "DELETE_STORAGE_POOL_SNAPSHOT_FAILED", err.Error())
 		return
 	}
+	audit.UserAction(r.Context(), "snapshot_deleted", "delete", true, "storage_pool_snapshot", strings.TrimSpace(r.PathValue("snapshotId")), pool.Name, "Snapshot deleted", result)
 	writeJSON(w, result)
 }
 
@@ -91,10 +100,12 @@ func (h *Handler) HandleRestoreSnapshot(w http.ResponseWriter, r *http.Request) 
 		case errors.Is(err, errFormatPasswordNotConfigured):
 			writeAPIError(w, http.StatusServiceUnavailable, "RESTORE_PASSWORD_NOT_CONFIGURED", "Restore password is not configured")
 		default:
+			audit.UserAction(r.Context(), "snapshot_restore_failed", "restore", false, "storage_pool_snapshot", strings.TrimSpace(r.PathValue("snapshotId")), pool.Name, err.Error(), nil)
 			writeAPIError(w, http.StatusBadRequest, "RESTORE_STORAGE_POOL_SNAPSHOT_FAILED", err.Error())
 		}
 		return
 	}
+	audit.UserAction(r.Context(), "snapshot_restored", "restore", true, "storage_pool_snapshot", strings.TrimSpace(r.PathValue("snapshotId")), pool.Name, "Snapshot restored", result)
 	writeJSON(w, result)
 }
 

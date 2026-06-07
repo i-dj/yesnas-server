@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"nas-server/internal/audit"
 	"nas-server/pkg/httpx"
 )
 
@@ -49,9 +50,16 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := UpsertShare("", req)
 	if err != nil {
+		audit.UserAction(r.Context(), "file_share_create_failed", "create", false, "file_share", "", req.Name, err.Error(), nil)
 		writeAPIError(w, http.StatusBadRequest, "FILE_SHARE_CREATE_FAILED", err.Error())
 		return
 	}
+	audit.UserAction(r.Context(), "file_share_created", "create", true, "file_share", item.ID, item.Name, "File share created", map[string]any{
+		"path":           item.Path,
+		"protocols":      item.Protocols,
+		"clientNetworks": item.ClientNetworks,
+		"userIds":        item.UserIDs,
+	})
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, item)
 }
@@ -64,18 +72,33 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := UpsertShare(r.PathValue("shareId"), req)
 	if err != nil {
+		audit.UserAction(r.Context(), "file_share_update_failed", "update", false, "file_share", r.PathValue("shareId"), req.Name, err.Error(), nil)
 		writeAPIError(w, http.StatusBadRequest, "FILE_SHARE_UPDATE_FAILED", err.Error())
 		return
 	}
+	audit.UserAction(r.Context(), "file_share_updated", "update", true, "file_share", item.ID, item.Name, "File share updated", map[string]any{
+		"path":           item.Path,
+		"protocols":      item.Protocols,
+		"clientNetworks": item.ClientNetworks,
+		"userIds":        item.UserIDs,
+		"status":         item.Status,
+	})
 	writeJSON(w, item)
 }
 
 func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("shareId")
+	item, _ := GetShare(id)
 	if err := DeleteShare(id); err != nil {
+		audit.UserAction(r.Context(), "file_share_delete_failed", "delete", false, "file_share", id, "", "Failed to delete file share: "+err.Error(), nil)
 		writeAPIError(w, http.StatusInternalServerError, "FILE_SHARE_DELETE_FAILED", "Failed to delete file share: "+err.Error())
 		return
 	}
+	resourceName := ""
+	if item != nil {
+		resourceName = item.Name
+	}
+	audit.UserAction(r.Context(), "file_share_deleted", "delete", true, "file_share", id, resourceName, "File share deleted", nil)
 	writeJSON(w, map[string]any{"deleted": true, "id": id})
 }
 
@@ -108,9 +131,15 @@ func (h *Handler) HandleProtocolServiceAction(w http.ResponseWriter, r *http.Req
 	host := requestHost(r)
 	item, err := ControlProtocolService(r.Context(), Protocol(r.PathValue("protocol")), req.Action, host)
 	if err != nil {
+		audit.UserAction(r.Context(), "protocol_service_action_failed", strings.TrimSpace(req.Action), false, "protocol_service", r.PathValue("protocol"), r.PathValue("protocol"), err.Error(), nil)
 		writeAPIError(w, http.StatusBadRequest, "PROTOCOL_SERVICE_ACTION_FAILED", err.Error())
 		return
 	}
+	audit.UserAction(r.Context(), "protocol_service_action", strings.TrimSpace(req.Action), true, "protocol_service", string(item.Protocol), string(item.Protocol), "Protocol service action completed", map[string]any{
+		"active":   item.Active,
+		"status":   item.Status,
+		"shareUrl": item.ShareURL,
+	})
 	writeJSON(w, item)
 }
 

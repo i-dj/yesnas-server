@@ -167,7 +167,67 @@ func EnsureUsersSchema() error {
 	}); err != nil {
 		return err
 	}
-	return nil
+	return ensureIndexes([]string{
+		`CREATE INDEX IF NOT EXISTS idx_users_status ON users(status)`,
+	})
+}
+
+func EnsureUserSessionSchema() error {
+	if DB == nil {
+		return fmt.Errorf("database is not initialized; call InitDB first")
+	}
+	if err := ensureColumns("user_sessions", map[string]string{
+		"status":        "TEXT NOT NULL DEFAULT 'active'",
+		"ip_address":    "TEXT DEFAULT ''",
+		"user_agent":    "TEXT DEFAULT ''",
+		"updated_at":    "DATETIME DEFAULT CURRENT_TIMESTAMP",
+		"expires_at":    "DATETIME",
+		"last_seen_at":  "DATETIME",
+		"logged_out_at": "DATETIME",
+	}); err != nil {
+		return err
+	}
+	return ensureIndexes([]string{
+		`CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_sessions_status_expires_at ON user_sessions(status, expires_at)`,
+	})
+}
+
+func EnsureAuditLogSchema() error {
+	if DB == nil {
+		return fmt.Errorf("database is not initialized; call InitDB first")
+	}
+	if err := ensureColumns("audit_logs", map[string]string{
+		"category":           "TEXT NOT NULL DEFAULT 'user'",
+		"severity":           "TEXT NOT NULL DEFAULT 'info'",
+		"source":             "TEXT NOT NULL DEFAULT 'api'",
+		"event":              "TEXT NOT NULL DEFAULT ''",
+		"action":             "TEXT NOT NULL DEFAULT ''",
+		"success":            "INTEGER DEFAULT 1",
+		"actor_user_id":      "TEXT DEFAULT ''",
+		"actor_username":     "TEXT DEFAULT ''",
+		"actor_display_name": "TEXT DEFAULT ''",
+		"ip_address":         "TEXT DEFAULT ''",
+		"user_agent":         "TEXT DEFAULT ''",
+		"method":             "TEXT DEFAULT ''",
+		"path":               "TEXT DEFAULT ''",
+		"resource_type":      "TEXT DEFAULT ''",
+		"resource_id":        "TEXT DEFAULT ''",
+		"resource_name":      "TEXT DEFAULT ''",
+		"message":            "TEXT DEFAULT ''",
+		"details_json":       "TEXT DEFAULT ''",
+		"occurred_at":        "DATETIME DEFAULT CURRENT_TIMESTAMP",
+	}); err != nil {
+		return err
+	}
+	return ensureIndexes([]string{
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_occurred_at ON audit_logs(occurred_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_category_occurred_at ON audit_logs(category, occurred_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_severity_occurred_at ON audit_logs(severity, occurred_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_source_occurred_at ON audit_logs(source, occurred_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_user_id_occurred_at ON audit_logs(actor_user_id, occurred_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_event_occurred_at ON audit_logs(event, occurred_at DESC)`,
+	})
 }
 
 func EnsureFileShareSchema() error {
@@ -183,7 +243,9 @@ func EnsureFileShareSchema() error {
 	}); err != nil {
 		return err
 	}
-	return nil
+	return ensureIndexes([]string{
+		`CREATE INDEX IF NOT EXISTS idx_file_shares_status ON file_shares(status)`,
+	})
 }
 
 func ensureColumns(table string, columns map[string]string) error {
@@ -203,6 +265,18 @@ func ensureColumns(table string, columns map[string]string) error {
 		stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, name, ddl)
 		if _, err := DB.Exec(stmt); err != nil {
 			return fmt.Errorf("failed to add column %s to table %s: %w", name, table, err)
+		}
+	}
+	return nil
+}
+
+func ensureIndexes(statements []string) error {
+	if DB == nil {
+		return fmt.Errorf("database is not initialized; call InitDB first")
+	}
+	for _, stmt := range statements {
+		if _, err := DB.Exec(stmt); err != nil {
+			return fmt.Errorf("failed to create index with statement %q: %w", stmt, err)
 		}
 	}
 	return nil

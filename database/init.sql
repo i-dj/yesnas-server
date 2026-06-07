@@ -135,7 +135,43 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at     DATETIME
 );
 
-CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id             TEXT PRIMARY KEY,
+    user_id        TEXT NOT NULL,
+    token_hash     TEXT NOT NULL UNIQUE,
+    status         TEXT NOT NULL DEFAULT 'active',
+    ip_address     TEXT DEFAULT '',
+    user_agent     TEXT DEFAULT '',
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at     DATETIME,
+    last_seen_at   DATETIME,
+    logged_out_at  DATETIME,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id                 TEXT PRIMARY KEY,
+    category           TEXT NOT NULL,
+    severity           TEXT NOT NULL DEFAULT 'info',
+    source             TEXT NOT NULL DEFAULT 'api',
+    event              TEXT NOT NULL,
+    action             TEXT NOT NULL,
+    success            INTEGER DEFAULT 1,
+    actor_user_id      TEXT DEFAULT '',
+    actor_username     TEXT DEFAULT '',
+    actor_display_name TEXT DEFAULT '',
+    ip_address         TEXT DEFAULT '',
+    user_agent         TEXT DEFAULT '',
+    method             TEXT DEFAULT '',
+    path               TEXT DEFAULT '',
+    resource_type      TEXT DEFAULT '',
+    resource_id        TEXT DEFAULT '',
+    resource_name      TEXT DEFAULT '',
+    message            TEXT DEFAULT '',
+    details_json       TEXT DEFAULT '',
+    occurred_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE IF NOT EXISTS file_shares (
     id              TEXT PRIMARY KEY,
@@ -149,8 +185,6 @@ CREATE TABLE IF NOT EXISTS file_shares (
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME
 );
-
-CREATE INDEX IF NOT EXISTS idx_file_shares_status ON file_shares(status);
 
 -- Favorites table
 CREATE TABLE IF NOT EXISTS favorites (

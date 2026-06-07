@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"nas-server/internal/audit"
 	commandrunner "nas-server/pkg/shell"
 )
 
@@ -37,11 +38,12 @@ func (h *Handler) HandleReplaceDevice(w http.ResponseWriter, r *http.Request) {
 		case err == errFormatPasswordNotConfigured:
 			writeAPIError(w, http.StatusServiceUnavailable, "REPLACE_DEVICE_PASSWORD_NOT_CONFIGURED", "Replace device password is not configured")
 		default:
+			audit.UserAction(r.Context(), "storage_pool_replace_device_failed", "replace_device", false, "storage_pool", pool.ID, pool.Name, err.Error(), nil)
 			writeAPIError(w, http.StatusBadRequest, "REPLACE_STORAGE_POOL_DEVICE_FAILED", err.Error())
 		}
 		return
 	}
-
+	audit.UserAction(r.Context(), "storage_pool_device_replaced", "replace_device", true, "storage_pool", pool.ID, pool.Name, "Storage pool device replaced", result)
 	writeJSON(w, result)
 }
 

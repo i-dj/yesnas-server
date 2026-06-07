@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"nas-server/internal/audit"
 	"nas-server/internal/storage"
 	commandrunner "nas-server/pkg/shell"
 )
@@ -28,9 +29,11 @@ func (h *Handler) HandleDeletePool(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := DeletePool(r.Context(), pool, req)
 	if err != nil {
+		audit.UserAction(r.Context(), "storage_pool_delete_failed", "delete", false, "storage_pool", pool.ID, pool.Name, err.Error(), nil)
 		writeAPIError(w, http.StatusBadRequest, "DELETE_STORAGE_POOL_FAILED", err.Error())
 		return
 	}
+	audit.UserAction(r.Context(), "storage_pool_deleted", "delete", true, "storage_pool", pool.ID, pool.Name, "Storage pool deleted", result)
 	writeJSON(w, result)
 }
 

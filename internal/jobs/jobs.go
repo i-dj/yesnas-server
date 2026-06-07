@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"nas-server/database"
+	"nas-server/internal/audit"
 	"nas-server/internal/storage"
 	"nas-server/internal/storagepool"
 	"nas-server/pkg/httpx"
@@ -390,9 +391,11 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		cleanupJobPayload(item)
 	}
 	if err := deleteJob(item.ID); err != nil {
+		audit.UserAction(r.Context(), "job_delete_failed", "delete", false, "job", item.ID, item.Title, "Failed to delete job: "+err.Error(), nil)
 		writeAPIError(w, http.StatusInternalServerError, "JOB_DELETE_FAILED", "Failed to delete job: "+err.Error())
 		return
 	}
+	audit.UserAction(r.Context(), "job_deleted", "delete", true, "job", item.ID, item.Title, "Job deleted", nil)
 	writeJSON(w, map[string]any{"deleted": true, "id": item.ID})
 }
 
@@ -407,12 +410,14 @@ func (h *Handler) HandlePause(w http.ResponseWriter, r *http.Request) {
 	switch Status(item.Status) {
 	case StatusPending:
 		if err := updatePaused(item.ID, pausedStatusMessage(Type(item.Type))); err != nil {
+			audit.UserAction(r.Context(), "job_pause_failed", "pause", false, "job", item.ID, item.Title, "Failed to pause job: "+err.Error(), nil)
 			writeAPIError(w, http.StatusInternalServerError, "JOB_PAUSE_FAILED", "Failed to pause job: "+err.Error())
 			return
 		}
 	case StatusRunning:
 		requestRunningJobStop(item.ID, jobStopReasonPause)
 		if err := updatePaused(item.ID, pausedStatusMessage(Type(item.Type))); err != nil {
+			audit.UserAction(r.Context(), "job_pause_failed", "pause", false, "job", item.ID, item.Title, "Failed to pause job: "+err.Error(), nil)
 			writeAPIError(w, http.StatusInternalServerError, "JOB_PAUSE_FAILED", "Failed to pause job: "+err.Error())
 			return
 		}
@@ -427,6 +432,7 @@ func (h *Handler) HandlePause(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusNotFound, "JOB_NOT_FOUND", "Job not found")
 		return
 	}
+	audit.UserAction(r.Context(), "job_paused", "pause", true, "job", item.ID, item.Title, "Job paused", nil)
 	writeJSON(w, item)
 }
 
@@ -446,6 +452,7 @@ func (h *Handler) HandleResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := updateResume(item.ID, Type(item.Type)); err != nil {
+		audit.UserAction(r.Context(), "job_resume_failed", "resume", false, "job", item.ID, item.Title, "Failed to resume job: "+err.Error(), nil)
 		writeAPIError(w, http.StatusInternalServerError, "JOB_RESUME_FAILED", "Failed to resume job: "+err.Error())
 		return
 	}
@@ -454,6 +461,7 @@ func (h *Handler) HandleResume(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusNotFound, "JOB_NOT_FOUND", "Job not found")
 		return
 	}
+	audit.UserAction(r.Context(), "job_resumed", "resume", true, "job", item.ID, item.Title, "Job resumed", nil)
 	writeJSON(w, item)
 }
 
@@ -469,6 +477,7 @@ func (h *Handler) HandleCancel(w http.ResponseWriter, r *http.Request) {
 	case StatusPending, StatusPaused:
 		cleanupJobPayload(item)
 		if err := updateCancelled(item.ID, "Job cancelled"); err != nil {
+			audit.UserAction(r.Context(), "job_cancel_failed", "cancel", false, "job", item.ID, item.Title, "Failed to cancel job: "+err.Error(), nil)
 			writeAPIError(w, http.StatusInternalServerError, "JOB_CANCEL_FAILED", "Failed to cancel job: "+err.Error())
 			return
 		}
@@ -476,6 +485,7 @@ func (h *Handler) HandleCancel(w http.ResponseWriter, r *http.Request) {
 		requestRunningJobStop(item.ID, jobStopReasonCancel)
 		cleanupJobPayload(item)
 		if err := updateCancelled(item.ID, "Job cancelled"); err != nil {
+			audit.UserAction(r.Context(), "job_cancel_failed", "cancel", false, "job", item.ID, item.Title, "Failed to cancel job: "+err.Error(), nil)
 			writeAPIError(w, http.StatusInternalServerError, "JOB_CANCEL_FAILED", "Failed to cancel job: "+err.Error())
 			return
 		}
@@ -490,6 +500,7 @@ func (h *Handler) HandleCancel(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusNotFound, "JOB_NOT_FOUND", "Job not found")
 		return
 	}
+	audit.UserAction(r.Context(), "job_cancelled", "cancel", true, "job", item.ID, item.Title, "Job cancelled", nil)
 	writeJSON(w, item)
 }
 
@@ -724,6 +735,12 @@ func enqueueAutoSnapshotJob(pool storagepool.StoragePool, now time.Time) (*Job, 
 		return nil, err
 	}
 	log.Printf("[JOBS] enqueued id=%s type=%s pool=%s schedule=%s", item.ID, item.Type, pool.ID, pool.AutoSnapshotSchedule)
+	audit.AutoSnapshotScheduled(context.Background(), pool.ID, pool.Name, map[string]any{
+		"jobId":     item.ID,
+		"schedule":  pool.AutoSnapshotSchedule,
+		"nextRunAt": pool.NextAutoSnapshotAt,
+		"storageId": pool.StorageID,
+	})
 	return item, nil
 }
 
@@ -752,6 +769,7 @@ func runAutoSnapshotJob(item *Job) {
 	var payload AutoSnapshotPayload
 	if err := json.Unmarshal([]byte(item.PayloadJSON), &payload); err != nil {
 		log.Printf("[JOBS] decode auto snapshot payload failed id=%s err=%v", item.ID, err)
+		audit.AutoSnapshotFailed(context.Background(), "job", item.ID, item.Title, "Failed to decode automatic snapshot payload: "+err.Error(), nil)
 		_ = updateFailure(item.ID, "Failed to decode auto snapshot payload: "+err.Error(), failureStatusMessage(TypeAutoSnapshot))
 		return
 	}
@@ -759,11 +777,13 @@ func runAutoSnapshotJob(item *Job) {
 	pool, err := storagepool.Get(strings.TrimSpace(payload.PoolID))
 	if err != nil {
 		log.Printf("[JOBS] auto snapshot pool missing id=%s pool=%s err=%v", item.ID, payload.PoolID, err)
+		audit.AutoSnapshotFailed(context.Background(), "storage_pool", payload.PoolID, "", "Storage pool not found for automatic snapshot", map[string]any{"jobId": item.ID})
 		_ = updateFailure(item.ID, "Storage pool not found", failureStatusMessage(TypeAutoSnapshot))
 		return
 	}
 	if !pool.AutoSnapshotEnabled || strings.TrimSpace(pool.AutoSnapshotSchedule) == "" {
 		log.Printf("[JOBS] auto snapshot disabled id=%s pool=%s", item.ID, pool.ID)
+		audit.AutoSnapshotFailed(context.Background(), "storage_pool", pool.ID, pool.Name, "Automatic snapshot is disabled for this storage pool", map[string]any{"jobId": item.ID})
 		_ = updateFailure(item.ID, "Automatic snapshot is disabled for this storage pool", failureStatusMessage(TypeAutoSnapshot))
 		return
 	}
@@ -795,6 +815,7 @@ func runAutoSnapshotJob(item *Job) {
 			return
 		}
 		log.Printf("[JOBS] auto snapshot failed id=%s pool=%s err=%v", item.ID, pool.ID, err)
+		audit.AutoSnapshotFailed(context.Background(), "storage_pool", pool.ID, pool.Name, "Failed to create automatic snapshot: "+err.Error(), map[string]any{"jobId": item.ID, "schedule": pool.AutoSnapshotSchedule})
 		_ = updateFailure(item.ID, "Failed to create automatic snapshot: "+err.Error(), failureStatusMessage(TypeAutoSnapshot))
 		return
 	}
@@ -807,11 +828,20 @@ func runAutoSnapshotJob(item *Job) {
 	next := storagepool.NextAutoSnapshotTime(completedAt, pool.AutoSnapshotSchedule)
 	if err := storagepool.UpdateAutoSnapshotSuccess(pool.ID, completedAt, next); err != nil {
 		log.Printf("[JOBS] auto snapshot metadata update failed id=%s pool=%s err=%v", item.ID, pool.ID, err)
+		audit.AutoSnapshotFailed(context.Background(), "storage_pool", pool.ID, pool.Name, "Snapshot created but schedule update failed: "+err.Error(), map[string]any{"jobId": item.ID, "snapshotName": snapshot.Name})
 		_ = updateFailure(item.ID, "Snapshot created but failed to update auto snapshot schedule: "+err.Error(), failureStatusMessage(TypeAutoSnapshot))
 		return
 	}
 
 	log.Printf("[JOBS] auto snapshot success id=%s pool=%s snapshot=%s duration=%s", item.ID, pool.ID, snapshot.Name, time.Since(startedAt))
+	audit.AutoSnapshotCompleted(context.Background(), pool.ID, pool.Name, map[string]any{
+		"jobId":        item.ID,
+		"schedule":     pool.AutoSnapshotSchedule,
+		"snapshotId":   snapshot.MetadataID,
+		"snapshotName": snapshot.Name,
+		"snapshotPath": snapshot.Path,
+		"nextRunAt":    next.Format(time.RFC3339),
+	})
 	_ = updateSuccess(item.ID, map[string]any{
 		"poolId":     pool.ID,
 		"schedule":   pool.AutoSnapshotSchedule,

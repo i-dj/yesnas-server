@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"nas-server/internal/audit"
 	"nas-server/internal/storage"
 	commandrunner "nas-server/pkg/shell"
 )
@@ -23,9 +24,17 @@ func (h *Handler) HandleCreatePool(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := CreatePool(r.Context(), req)
 	if err != nil {
+		audit.UserAction(r.Context(), "storage_pool_create_failed", "create", false, "storage_pool", "", req.Name, err.Error(), nil)
 		writeAPIError(w, http.StatusBadRequest, "CREATE_STORAGE_POOL_FAILED", err.Error())
 		return
 	}
+	audit.UserAction(r.Context(), "storage_pool_created", "create", true, "storage_pool", result.ID, result.Name, "Storage pool created", map[string]any{
+		"filesystem":           result.Filesystem,
+		"raidLevel":            result.RaidLevel,
+		"mountPath":            result.MountPath,
+		"autoSnapshotEnabled":  result.AutoSnapshotEnabled,
+		"autoSnapshotSchedule": result.AutoSnapshotSchedule,
+	})
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, result)
 }

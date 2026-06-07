@@ -36,6 +36,15 @@ func Get(id string) (*User, error) {
 	return &item, nil
 }
 
+func GetByUsername(username string) (*User, error) {
+	var item User
+	err := database.DB.Get(&item, userSelectSQL+` WHERE username = ?`, normalizeUsername(username))
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
 func ListByIDs(ids []string) ([]User, error) {
 	result := make([]User, 0, len(ids))
 	for _, id := range ids {
@@ -46,6 +55,20 @@ func ListByIDs(ids []string) ([]User, error) {
 		result = append(result, *item)
 	}
 	return result, nil
+}
+
+func Authenticate(username string, password string) (*User, error) {
+	item, err := GetByUsername(username)
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(strings.TrimSpace(item.Status), string(StatusDisabled)) {
+		return nil, fmt.Errorf("user is disabled")
+	}
+	if !verifyPassword(password, item.PasswordHash) {
+		return nil, fmt.Errorf("invalid username or password")
+	}
+	return item, nil
 }
 
 func Create(req CreateRequest) (*User, string, error) {
@@ -133,6 +156,12 @@ func Update(id string, req UpdateRequest) (*User, string, error) {
 func Delete(id string) error {
 	_, err := database.DB.Exec(`DELETE FROM users WHERE id = ?`, strings.TrimSpace(id))
 	return err
+}
+
+func CountAdmins() (int, error) {
+	var count int
+	err := database.DB.Get(&count, `SELECT COUNT(1) FROM users WHERE COALESCE(is_admin, 0) = 1`)
+	return count, err
 }
 
 const userSelectSQL = `SELECT id, username, COALESCE(display_name, '') AS display_name, COALESCE(is_admin, 0) AS is_admin, COALESCE(avatar, '') AS avatar, password_hash, status, created_at, updated_at FROM users`

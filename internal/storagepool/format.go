@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"nas-server/internal/audit"
 	"nas-server/internal/storage"
 	commandrunner "nas-server/pkg/shell"
 )
@@ -45,11 +46,12 @@ func (h *Handler) HandleFormatPool(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, errFormatPasswordNotConfigured):
 			writeAPIError(w, http.StatusServiceUnavailable, "FORMAT_PASSWORD_NOT_CONFIGURED", "Format password is not configured")
 		default:
+			audit.UserAction(r.Context(), "storage_pool_format_failed", "format", false, "storage_pool", pool.ID, pool.Name, err.Error(), nil)
 			writeAPIError(w, http.StatusBadRequest, "FORMAT_STORAGE_POOL_FAILED", err.Error())
 		}
 		return
 	}
-
+	audit.UserAction(r.Context(), "storage_pool_formatted", "format", true, "storage_pool", pool.ID, pool.Name, "Storage pool formatted", result)
 	writeJSON(w, result)
 }
 

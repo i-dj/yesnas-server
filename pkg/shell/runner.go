@@ -48,6 +48,7 @@ var preferredCommandPaths = map[string][]string{
 	"sync":       {"/usr/bin/sync", "/bin/sync"},
 	"rclone":     {"/usr/bin/rclone", "/usr/local/bin/rclone", "/bin/rclone"},
 	"vnstat":     {"/usr/bin/vnstat", "/usr/local/bin/vnstat", "/bin/vnstat"},
+	"docker":     {"/usr/bin/docker", "/usr/local/bin/docker", "/bin/docker"},
 	"id":         {"/usr/bin/id", "/bin/id"},
 	"useradd":    {"/usr/sbin/useradd", "/sbin/useradd", "/usr/bin/useradd"},
 	"usermod":    {"/usr/sbin/usermod", "/sbin/usermod", "/usr/bin/usermod"},
