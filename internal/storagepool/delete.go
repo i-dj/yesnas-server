@@ -54,8 +54,11 @@ func DeletePool(ctx context.Context, pool *StoragePool, req DeleteRequest) (map[
 			return nil, fmt.Errorf("unmount pool: %w", err)
 		}
 	}
-	if err := removePoolMountFromFstab(ctx, pool.MountPath); err != nil {
-		return nil, fmt.Errorf("remove fstab entry: %w", err)
+	if err := removePoolMountUnit(ctx, pool.MountPath); err != nil {
+		return nil, fmt.Errorf("remove mount unit: %w", err)
+	}
+	if err := removeLegacyPoolMountFromFstab(ctx, pool.MountPath); err != nil {
+		return nil, fmt.Errorf("remove legacy fstab entry: %w", err)
 	}
 	if err := DeleteByID(pool.ID); err != nil {
 		return nil, fmt.Errorf("delete storage pool record: %w", err)
@@ -107,47 +110,4 @@ func cleanupPoolMountPath(ctx context.Context, mountPath string) error {
 		return err
 	}
 	return nil
-}
-
-func removePoolMountFromFstab(ctx context.Context, mountPath string) error {
-	content, err := os.ReadFile("/etc/fstab")
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	lines := strings.Split(string(content), "\n")
-	filtered := make([]string, 0, len(lines))
-	changed := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && !strings.HasPrefix(trimmed, "#") && strings.Contains(trimmed, mountPath) {
-			changed = true
-			continue
-		}
-		filtered = append(filtered, line)
-	}
-	if !changed {
-		return nil
-	}
-	updated := strings.Join(filtered, "\n")
-	if !strings.HasSuffix(updated, "\n") {
-		updated += "\n"
-	}
-	_, err = commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true, Stdin: updated}, "tee", "/etc/fstab")
-	return err
-}
-
-func fstabContainsEntry(content string, uuid string, mountPath string) bool {
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if strings.Contains(trimmed, "UUID="+uuid) || strings.Contains(trimmed, mountPath) {
-			return true
-		}
-	}
-	return false
 }

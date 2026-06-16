@@ -280,27 +280,3 @@ func readPoolSectorSize(kernelName string) uint64 {
 	}
 	return 512
 }
-
-func persistPoolMount(ctx context.Context, devicePath string, mountPath string) error {
-	uuidResult, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "blkid", "-s", "UUID", "-o", "value", devicePath)
-	if err != nil {
-		return fmt.Errorf("read filesystem uuid for %s: %w", devicePath, err)
-	}
-	uuid := strings.TrimSpace(uuidResult.Stdout)
-	if uuid == "" {
-		return fmt.Errorf("filesystem uuid is empty for %s", devicePath)
-	}
-	entry := fmt.Sprintf("UUID=%s %s btrfs defaults,nofail,x-systemd.device-timeout=5 0 0", uuid, mountPath)
-	existingFstab, err := os.ReadFile("/etc/fstab")
-	if err == nil {
-		if fstabContainsEntry(string(existingFstab), uuid, mountPath) {
-			return nil
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read /etc/fstab: %w", err)
-	}
-	if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true, Stdin: entry + "\n"}, "tee", "-a", "/etc/fstab"); err != nil {
-		return fmt.Errorf("append /etc/fstab: %w", err)
-	}
-	return nil
-}

@@ -89,11 +89,8 @@ func CreatePool(ctx context.Context, req CreateRequest) (*StoragePool, error) {
 	if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "mkfs.btrfs", mkfsArgs...); err != nil {
 		return nil, fmt.Errorf("mkfs.btrfs failed: %w", err)
 	}
-	if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "mount", "-t", "btrfs", devicePaths[0], mountPath); err != nil {
-		return nil, fmt.Errorf("mount btrfs pool failed: %w", err)
-	}
 	if err := persistPoolMount(ctx, devicePaths[0], mountPath); err != nil {
-		return nil, fmt.Errorf("persist fstab entry: %w", err)
+		return nil, fmt.Errorf("persist systemd mount unit: %w", err)
 	}
 	if err := initializePoolLayout(ctx, mountPath, dataPath); err != nil {
 		return nil, fmt.Errorf("initialize pool layout: %w", err)
@@ -152,13 +149,11 @@ func normalizeAutoSnapshot(enabled bool, schedule string) (string, error) {
 	if !enabled {
 		return "", nil
 	}
-	value := AutoSnapshotSchedule(strings.ToLower(strings.TrimSpace(schedule)))
-	switch value {
-	case AutoSnapshotScheduleHourly, AutoSnapshotScheduleDaily, AutoSnapshotScheduleMonthly:
-		return string(value), nil
-	default:
-		return "", fmt.Errorf("auto snapshot schedule must be one of: hourly, daily, monthly")
+	value, err := normalizeWeeklySchedule(schedule)
+	if err != nil {
+		return "", err
 	}
+	return value, nil
 }
 
 func initialAutoSnapshotNextRun(enabled bool, schedule string, now time.Time) *time.Time {
@@ -171,15 +166,81 @@ func initialAutoSnapshotNextRun(enabled bool, schedule string, now time.Time) *t
 
 func NextAutoSnapshotTime(from time.Time, schedule string) time.Time {
 	base := from.In(time.Local)
-	switch AutoSnapshotSchedule(strings.ToLower(strings.TrimSpace(schedule))) {
-	case AutoSnapshotScheduleHourly:
+	if normalized, err := normalizeWeeklySchedule(schedule); err == nil {
+		allowed := make(map[time.Weekday]struct{}, len(normalized))
+		for _, char := range normalized {
+			allowed[weekdayFromDigit(byte(char))] = struct{}{}
+		}
+		dayStart := time.Date(base.Year(), base.Month(), base.Day(), 0, 0, 0, 0, base.Location())
+		for offset := 0; offset <= 7; offset++ {
+			candidate := dayStart.AddDate(0, 0, offset)
+			if !candidate.After(base) {
+				continue
+			}
+			if _, ok := allowed[candidate.Weekday()]; ok {
+				return candidate
+			}
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(schedule)) {
+	case "hourly":
 		return base.Truncate(time.Hour).Add(time.Hour)
-	case AutoSnapshotScheduleDaily:
+	case "daily":
 		return time.Date(base.Year(), base.Month(), base.Day()+1, 0, 0, 0, 0, base.Location())
-	case AutoSnapshotScheduleMonthly:
+	case "monthly":
 		return time.Date(base.Year(), base.Month()+1, 1, 0, 0, 0, 0, base.Location())
 	default:
-		return base.Add(time.Hour)
+		return time.Date(base.Year(), base.Month(), base.Day()+1, 0, 0, 0, 0, base.Location())
+	}
+}
+
+func normalizeWeeklySchedule(schedule string) (string, error) {
+	value := strings.TrimSpace(schedule)
+	if value == "" {
+		return "", fmt.Errorf("auto snapshot schedule is required")
+	}
+	seen := make(map[byte]struct{}, len(value))
+	var builder strings.Builder
+	for digit := byte('1'); digit <= byte('7'); digit++ {
+		for i := 0; i < len(value); i++ {
+			char := value[i]
+			if char < '1' || char > '7' {
+				return "", fmt.Errorf("auto snapshot schedule must be a string containing weekdays 1-7, for example 123567")
+			}
+			if char != digit {
+				continue
+			}
+			if _, ok := seen[char]; ok {
+				continue
+			}
+			seen[char] = struct{}{}
+			builder.WriteByte(char)
+		}
+	}
+	if builder.Len() == 0 {
+		return "", fmt.Errorf("auto snapshot schedule must include at least one weekday between 1 and 7")
+	}
+	return builder.String(), nil
+}
+
+func weekdayFromDigit(value byte) time.Weekday {
+	switch value {
+	case '1':
+		return time.Monday
+	case '2':
+		return time.Tuesday
+	case '3':
+		return time.Wednesday
+	case '4':
+		return time.Thursday
+	case '5':
+		return time.Friday
+	case '6':
+		return time.Saturday
+	case '7':
+		return time.Sunday
+	default:
+		return time.Sunday
 	}
 }
 

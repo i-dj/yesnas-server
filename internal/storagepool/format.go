@@ -87,8 +87,11 @@ func FormatPool(ctx context.Context, pool *StoragePool, req FormatRequest) (map[
 			return nil, fmt.Errorf("unmount pool: %w", err)
 		}
 	}
-	if err := removePoolMountFromFstab(ctx, pool.MountPath); err != nil {
-		return nil, fmt.Errorf("remove fstab entry: %w", err)
+	if err := removePoolMountUnit(ctx, pool.MountPath); err != nil {
+		return nil, fmt.Errorf("remove mount unit: %w", err)
+	}
+	if err := removeLegacyPoolMountFromFstab(ctx, pool.MountPath); err != nil {
+		return nil, fmt.Errorf("remove legacy fstab entry: %w", err)
 	}
 
 	for _, devicePath := range devicePaths {
@@ -108,11 +111,8 @@ func FormatPool(ctx context.Context, pool *StoragePool, req FormatRequest) (map[
 	if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "mkfs.btrfs", mkfsArgs...); err != nil {
 		return nil, fmt.Errorf("mkfs.btrfs failed: %w", err)
 	}
-	if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "mount", "-t", "btrfs", devicePaths[0], pool.MountPath); err != nil {
-		return nil, fmt.Errorf("mount btrfs pool failed: %w", err)
-	}
 	if err := persistPoolMount(ctx, devicePaths[0], pool.MountPath); err != nil {
-		return nil, fmt.Errorf("persist fstab entry: %w", err)
+		return nil, fmt.Errorf("persist systemd mount unit: %w", err)
 	}
 	if err := initializePoolLayout(ctx, pool.MountPath, pool.DataPath); err != nil {
 		return nil, fmt.Errorf("initialize pool layout: %w", err)

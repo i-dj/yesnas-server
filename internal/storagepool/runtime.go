@@ -31,6 +31,10 @@ func buildResponse(ctx context.Context, pool StoragePool) Response {
 	now := time.Now()
 	resp := Response{StoragePool: pool, Kind: "local", Provider: "btrfs", Status: string(storage.StatusOffline), Health: "offline", Snapshots: []Snapshot{}, Warnings: []string{}, LastCheckedAt: now}
 	mounted := isMountpointActive(pool.MountPath)
+	usagePath := pool.DataPath
+	if strings.TrimSpace(usagePath) == "" {
+		usagePath = pool.MountPath
+	}
 	resp.Devices = enrichPoolDevices(ctx, pool, resp.Devices, mounted)
 	resp.Mounted = mounted
 	if mounted {
@@ -38,25 +42,40 @@ func buildResponse(ctx context.Context, pool StoragePool) Response {
 		resp.Health = "healthy"
 	}
 	applyPoolDeviceStatus(&resp, pool)
+	logicalTotal, logicalUsed, logicalFree, statErr := statFilesystemUsage(usagePath)
+	if statErr != nil && strings.TrimSpace(usagePath) != strings.TrimSpace(pool.MountPath) {
+		logicalTotal, logicalUsed, logicalFree, statErr = statFilesystemUsage(pool.MountPath)
+	}
 	if usage, warnings := readBtrfsUsage(ctx, pool.MountPath); usage != nil {
 		resp.FilesystemUUID = usage.FilesystemUUID
-		resp.TotalBytes = usage.TotalBytes
-		resp.UsedBytes = usage.UsedBytes
-		resp.FreeBytes = usage.FreeBytes
-		resp.UsagePercent = calculateUsagePercent(usage.UsedBytes, usage.TotalBytes)
 		resp.DataProfile = usage.DataProfile
 		resp.MetadataProfile = usage.MetadataProfile
 		resp.SystemProfile = usage.SystemProfile
 		resp.Warnings = append(resp.Warnings, warnings...)
+		if statErr == nil {
+			if usage.HasDataUsedBytes {
+				resp.UsedBytes = usage.DataUsedBytes
+			} else {
+				resp.UsedBytes = logicalUsed
+			}
+			if usage.EstimatedFreeBytes > 0 {
+				resp.FreeBytes = usage.EstimatedFreeBytes
+			} else {
+				resp.FreeBytes = logicalFree
+			}
+			resp.TotalBytes = resp.UsedBytes + resp.FreeBytes
+			resp.UsagePercent = calculateUsagePercent(resp.UsedBytes, resp.TotalBytes)
+		} else if statErr != nil && mounted {
+			resp.Warnings = append(resp.Warnings, "failed to read logical filesystem usage: "+statErr.Error())
+		}
 	} else {
-		total, free, err := statFilesystemUsage(pool.MountPath)
-		if err == nil {
-			resp.TotalBytes = total
-			resp.FreeBytes = free
-			resp.UsedBytes = total - free
-			resp.UsagePercent = calculateUsagePercent(resp.UsedBytes, total)
+		if statErr == nil {
+			resp.TotalBytes = logicalTotal
+			resp.FreeBytes = logicalFree
+			resp.UsedBytes = logicalUsed
+			resp.UsagePercent = calculateUsagePercent(resp.UsedBytes, logicalTotal)
 		} else if mounted {
-			resp.Warnings = append(resp.Warnings, "failed to read filesystem usage: "+err.Error())
+			resp.Warnings = append(resp.Warnings, "failed to read filesystem usage: "+statErr.Error())
 		}
 	}
 	snapshots, warnings := readBtrfsSnapshots(ctx, pool.MountPath)
@@ -325,18 +344,18 @@ func readBtrfsUsage(ctx context.Context, mountPath string) (*BtrfsUsage, []strin
 		return nil, []string{"failed to read btrfs usage: " + err.Error()}
 	}
 	usage := &BtrfsUsage{}
-	var rawTotalBytes uint64
+	warnings := make([]string, 0)
 	for _, line := range strings.Split(result.Stdout, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(line, "UUID:"):
 			usage.FilesystemUUID = strings.TrimSpace(strings.TrimPrefix(line, "UUID:"))
 		case strings.HasPrefix(line, "Device size:"):
-			rawTotalBytes = parseFirstUint(strings.TrimSpace(strings.TrimPrefix(line, "Device size:")))
+			usage.DeviceSizeBytes = parseFirstUint(strings.TrimSpace(strings.TrimPrefix(line, "Device size:")))
 		case strings.HasPrefix(line, "Used:"):
-			usage.UsedBytes = parseFirstUint(strings.TrimSpace(strings.TrimPrefix(line, "Used:")))
+			usage.PhysicalUsedBytes = parseFirstUint(strings.TrimSpace(strings.TrimPrefix(line, "Used:")))
 		case strings.HasPrefix(line, "Free (estimated):"):
-			usage.FreeBytes = parseFirstUint(strings.TrimSpace(strings.TrimPrefix(line, "Free (estimated):")))
+			usage.EstimatedFreeBytes = parseFirstUint(strings.TrimSpace(strings.TrimPrefix(line, "Free (estimated):")))
 		case strings.HasPrefix(line, "Data,"):
 			usage.DataProfile = parseProfileFromUsageLine(line)
 		case strings.HasPrefix(line, "Metadata,"):
@@ -345,15 +364,23 @@ func readBtrfsUsage(ctx context.Context, mountPath string) (*BtrfsUsage, []strin
 			usage.SystemProfile = parseProfileFromUsageLine(line)
 		}
 	}
-	if usage.FreeBytes > 0 {
-		usage.TotalBytes = usage.UsedBytes + usage.FreeBytes
-	} else {
-		usage.TotalBytes = rawTotalBytes
+	dfResult, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "btrfs", "filesystem", "df", "-b", mountPath)
+	if err != nil {
+		warnings = append(warnings, "failed to read btrfs data usage: "+err.Error())
+		return usage, warnings
 	}
-	if usage.FreeBytes == 0 && usage.TotalBytes > usage.UsedBytes {
-		usage.FreeBytes = usage.TotalBytes - usage.UsedBytes
+	for _, line := range strings.Split(dfResult.Stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "Data,") {
+			continue
+		}
+		if usage.DataProfile == "" {
+			usage.DataProfile = parseProfileFromDFLine(line)
+		}
+		usage.HasDataUsedBytes = true
+		usage.DataUsedBytes += parseUsedValueFromDFLine(line)
 	}
-	return usage, nil
+	return usage, warnings
 }
 
 func readBtrfsSnapshots(ctx context.Context, mountPath string) ([]Snapshot, []string) {
@@ -565,6 +592,18 @@ func parseProfileFromUsageLine(line string) string {
 	return strings.TrimSpace(parts[1])
 }
 
+func parseProfileFromDFLine(line string) string {
+	prefix, _, found := strings.Cut(line, ":")
+	if !found {
+		return ""
+	}
+	parts := strings.Split(prefix, ",")
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
+}
+
 func parseFirstUint(value string) uint64 {
 	fields := strings.Fields(value)
 	if len(fields) == 0 {
@@ -574,14 +613,59 @@ func parseFirstUint(value string) uint64 {
 	return number
 }
 
-func statFilesystemUsage(path string) (uint64, uint64, error) {
+func parseUsedValueFromDFLine(line string) uint64 {
+	_, rest, found := strings.Cut(line, ":")
+	if !found {
+		return 0
+	}
+	for _, segment := range strings.Split(rest, ",") {
+		key, value, ok := strings.Cut(strings.TrimSpace(segment), "=")
+		if !ok || strings.TrimSpace(key) != "used" {
+			continue
+		}
+		return parseBtrfsSizeValue(strings.TrimSpace(value))
+	}
+	return 0
+}
+
+func parseBtrfsSizeValue(value string) uint64 {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if number, err := strconv.ParseUint(value, 10, 64); err == nil {
+		return number
+	}
+	var numeric float64
+	var unit string
+	if _, err := fmt.Sscanf(value, "%f%s", &numeric, &unit); err != nil {
+		return 0
+	}
+	multiplier := float64(1)
+	switch strings.ToUpper(strings.TrimSpace(unit)) {
+	case "KIB":
+		multiplier = 1024
+	case "MIB":
+		multiplier = 1024 * 1024
+	case "GIB":
+		multiplier = 1024 * 1024 * 1024
+	case "TIB":
+		multiplier = 1024 * 1024 * 1024 * 1024
+	case "PIB":
+		multiplier = 1024 * 1024 * 1024 * 1024 * 1024
+	}
+	return uint64(numeric * multiplier)
+}
+
+func statFilesystemUsage(path string) (uint64, uint64, uint64, error) {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(path, &stat); err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	total := uint64(stat.Blocks) * uint64(stat.Bsize)
+	used := uint64(stat.Blocks-stat.Bfree) * uint64(stat.Bsize)
 	free := uint64(stat.Bavail) * uint64(stat.Bsize)
-	return total, free, nil
+	return total, used, free, nil
 }
 
 func statFilesystem(path string) (int64, int64) {

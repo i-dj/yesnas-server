@@ -13,12 +13,6 @@ type CreateRequest struct {
 
 type AutoSnapshotSchedule string
 
-const (
-	AutoSnapshotScheduleHourly  AutoSnapshotSchedule = "hourly"
-	AutoSnapshotScheduleDaily   AutoSnapshotSchedule = "daily"
-	AutoSnapshotScheduleMonthly AutoSnapshotSchedule = "monthly"
-)
-
 type DeleteRequest struct {
 	WipeDevices bool `json:"wipeDevices"`
 }
@@ -133,11 +127,13 @@ type Snapshot struct {
 }
 
 type BtrfsUsage struct {
-	FilesystemUUID  string
-	TotalBytes      uint64
-	UsedBytes       uint64
-	FreeBytes       uint64
-	DataProfile     string
-	MetadataProfile string
-	SystemProfile   string
+	FilesystemUUID     string
+	DeviceSizeBytes    uint64
+	PhysicalUsedBytes  uint64
+	DataUsedBytes      uint64
+	HasDataUsedBytes   bool
+	EstimatedFreeBytes uint64
+	DataProfile        string
+	MetadataProfile    string
+	SystemProfile      string
 }
