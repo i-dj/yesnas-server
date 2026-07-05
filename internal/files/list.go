@@ -70,7 +70,7 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 				Name:      fav.FileName,
 				Type:      FileType,
 				ParentID:  encodeFilePath(filepath.Dir(fullPath)),
-				UpdatedAt: info.ModTime().Format(time.RFC3339),
+				UpdatedAt: info.ModTime().UTC().Format(time.RFC3339),
 				Extension: filepath.Ext(fav.FileName),
 				Size:      info.Size(),
 				MimeType:  mime.TypeByExtension(filepath.Ext(fav.FileName)),

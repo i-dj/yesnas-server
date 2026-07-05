@@ -82,7 +82,7 @@ func CollectNetworkInterfaces(ctx context.Context, networkRange NetworkRange, sa
 		Range:       networkRange,
 		StepSeconds: stepSeconds,
 		Interfaces:  statuses,
-		CheckedAt:   time.Now().Format(time.RFC3339),
+		CheckedAt:   time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
 
@@ -325,7 +325,7 @@ func entriesToTrafficPoints(entries []vnstatTrafficEntry, durationSeconds int64)
 	for _, entry := range entries {
 		timestamp := vnstatEntryTime(entry)
 		points = append(points, NetworkTrafficPoint{
-			Timestamp:       timestamp.Format(time.RFC3339),
+			Timestamp:       timestamp.UTC().Format(time.RFC3339),
 			RxBytes:         entry.Rx,
 			TxBytes:         entry.Tx,
 			RxBytesPerSec:   round1(float64(entry.Rx) / float64(durationSeconds)),

@@ -55,7 +55,7 @@ func CollectHardwareSnapshot(ctx context.Context, sampleInterval time.Duration) 
 		Disks:             disks.Items,
 		GPUs:              collectHardwareGPUs(ctx),
 		NetworkInterfaces: networkInterfaces,
-		CheckedAt:         time.Now().Format(time.RFC3339),
+		CheckedAt:         time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
 

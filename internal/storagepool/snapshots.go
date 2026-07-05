@@ -29,7 +29,7 @@ func (h *Handler) HandleListSnapshots(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"items":       items,
 		"warnings":    warnings,
-		"generatedAt": time.Now(),
+		"generatedAt": time.Now().UTC(),
 	})
 }
 
@@ -149,7 +149,7 @@ func CreateSnapshot(ctx context.Context, pool *StoragePool, req CreateSnapshotRe
 	if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "btrfs", args...); err != nil {
 		return nil, fmt.Errorf("create btrfs snapshot: %w", err)
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 	meta := SnapshotRecord{
 		PoolID:      pool.ID,
 		Name:        displayName,
@@ -237,7 +237,7 @@ func RestoreSnapshot(ctx context.Context, pool *StoragePool, snapshotID string, 
 		if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "btrfs", "subvolume", "snapshot", "-r", dataPath, backupPath); err != nil {
 			return nil, fmt.Errorf("create restore backup snapshot: %w", err)
 		}
-		now := time.Now()
+		now := time.Now().UTC()
 		backupMeta := SnapshotRecord{
 			PoolID:      pool.ID,
 			Name:        filepath.Base(backupPath),

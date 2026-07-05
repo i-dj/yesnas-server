@@ -173,7 +173,7 @@ func EnqueueCloudSync(storagePoolID string, payload CloudSyncPayload) (*Job, err
 		return nil, fmt.Errorf("encode sync job failed: %w", err)
 	}
 
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	item := &Job{
 		ID:            idgen.New(),
 		Type:          string(TypeCloudSync),
@@ -529,7 +529,7 @@ func claimNextPendingJob() (*Job, bool) {
 		return nil, false
 	}
 
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	runningMessage := runningMessageForType(Type(item.Type))
 	result, err := database.DB.Exec(
 		`UPDATE jobs SET status = ?, progress = ?, message = ?, started_at = ?, updated_at = ? WHERE id = ? AND status = ?`,
@@ -557,7 +557,7 @@ func markStaleRunningJobs() {
 		return
 	}
 
-	cutoff := time.Now().Add(-runningJobStaleAfter)
+	cutoff := time.Now().UTC().Add(-runningJobStaleAfter)
 	for _, item := range items {
 		updatedAt, ok := parseJobTime(item.UpdatedAt)
 		if !ok || updatedAt.After(cutoff) {
@@ -565,7 +565,7 @@ func markStaleRunningJobs() {
 		}
 		message := fmt.Sprintf("Job heartbeat timed out; the backend has not updated this job for more than %s. The job may have stopped or the service may have restarted.", runningJobStaleAfter)
 		statusMessage := failureStatusMessage(Type(item.Type))
-		now := time.Now().Format(time.RFC3339)
+		now := time.Now().UTC().Format(time.RFC3339)
 		result, err := database.DB.Exec(
 			`UPDATE jobs SET status = ?, message = ?, error_message = ?, finished_at = ?, updated_at = ? WHERE id = ? AND status = ?`,
 			string(StatusFailed), statusMessage, message, now, now, item.ID, string(StatusRunning),
@@ -675,7 +675,7 @@ func enqueueDueAutoSnapshotJobs() {
 		log.Printf("[JOBS] list auto snapshot pools failed err=%v", err)
 		return
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 	for _, pool := range pools {
 		if !pool.AutoSnapshotEnabled || strings.TrimSpace(pool.AutoSnapshotSchedule) == "" || pool.NextAutoSnapshotAt == nil {
 			continue
@@ -723,8 +723,8 @@ func enqueueAutoSnapshotJob(pool storagepool.StoragePool, now time.Time) (*Job, 
 		Progress:      0,
 		Message:       "Waiting to create automatic snapshot",
 		PayloadJSON:   string(payloadJSON),
-		CreatedAt:     now.Format(time.RFC3339),
-		UpdatedAt:     now.Format(time.RFC3339),
+		CreatedAt:     now.UTC().Format(time.RFC3339),
+		UpdatedAt:     now.UTC().Format(time.RFC3339),
 	}
 	_, err = database.DB.Exec(
 		`INSERT INTO jobs (id, type, status, title, storage_id, resource_type, resource_id, progress, message, error_message, payload_json, result_json, created_at, updated_at, started_at, finished_at)
@@ -824,7 +824,7 @@ func runAutoSnapshotJob(item *Job) {
 		return
 	}
 
-	completedAt := time.Now()
+	completedAt := time.Now().UTC()
 	next := storagepool.NextAutoSnapshotTime(completedAt, pool.AutoSnapshotSchedule)
 	if err := storagepool.UpdateAutoSnapshotSuccess(pool.ID, completedAt, next); err != nil {
 		log.Printf("[JOBS] auto snapshot metadata update failed id=%s pool=%s err=%v", item.ID, pool.ID, err)
@@ -840,7 +840,7 @@ func runAutoSnapshotJob(item *Job) {
 		"snapshotId":   snapshot.MetadataID,
 		"snapshotName": snapshot.Name,
 		"snapshotPath": snapshot.Path,
-		"nextRunAt":    next.Format(time.RFC3339),
+		"nextRunAt":    next.UTC().Format(time.RFC3339),
 	})
 	_ = updateSuccess(item.ID, map[string]any{
 		"poolId":     pool.ID,
@@ -979,17 +979,17 @@ func resolveCloudSyncStorage(storagePoolID string) (*storage.Storage, error) {
 }
 
 func updateProgress(jobID string, progress int, message string) error {
-	_, err := database.DB.Exec(`UPDATE jobs SET progress = ?, message = ?, updated_at = ? WHERE id = ?`, progress, message, time.Now().Format(time.RFC3339), jobID)
+	_, err := database.DB.Exec(`UPDATE jobs SET progress = ?, message = ?, updated_at = ? WHERE id = ?`, progress, message, time.Now().UTC().Format(time.RFC3339), jobID)
 	return err
 }
 
 func updateHeartbeat(jobID string) error {
-	_, err := database.DB.Exec(`UPDATE jobs SET updated_at = ? WHERE id = ? AND status = ?`, time.Now().Format(time.RFC3339), jobID, string(StatusRunning))
+	_, err := database.DB.Exec(`UPDATE jobs SET updated_at = ? WHERE id = ? AND status = ?`, time.Now().UTC().Format(time.RFC3339), jobID, string(StatusRunning))
 	return err
 }
 
 func updatePaused(jobID string, message string) error {
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := database.DB.Exec(
 		`UPDATE jobs SET status = ?, message = ?, error_message = '', updated_at = ? WHERE id = ? AND status IN (?, ?)`,
 		string(StatusPaused), message, now, jobID, string(StatusPending), string(StatusRunning),
@@ -998,7 +998,7 @@ func updatePaused(jobID string, message string) error {
 }
 
 func updateResume(jobID string, jobType Type) error {
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := database.DB.Exec(
 		`UPDATE jobs SET status = ?, progress = ?, message = ?, error_message = '', finished_at = NULL, updated_at = ? WHERE id = ? AND status = ?`,
 		string(StatusPending), 0, pendingStatusMessage(jobType), now, jobID, string(StatusPaused),
@@ -1007,7 +1007,7 @@ func updateResume(jobID string, jobType Type) error {
 }
 
 func updateCancelled(jobID string, message string) error {
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := database.DB.Exec(
 		`UPDATE jobs SET status = ?, progress = ?, message = ?, error_message = '', finished_at = ?, updated_at = ? WHERE id = ?`,
 		string(StatusCancelled), 100, message, now, now, jobID,
@@ -1016,7 +1016,7 @@ func updateCancelled(jobID string, message string) error {
 }
 
 func updateFailure(jobID string, message string, statusMessage string) error {
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := database.DB.Exec(
 		`UPDATE jobs SET status = ?, progress = ?, message = ?, error_message = ?, finished_at = ?, updated_at = ? WHERE id = ? AND status = ?`,
 		string(StatusFailed), 100, statusMessage, message, now, now, jobID, string(StatusRunning),
@@ -1031,7 +1031,7 @@ func deleteJob(jobID string) error {
 
 func updateSuccess(jobID string, result any, statusMessage string) error {
 	encoded, _ := json.Marshal(result)
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := database.DB.Exec(
 		`UPDATE jobs SET status = ?, progress = ?, message = ?, result_json = ?, error_message = '', finished_at = ?, updated_at = ? WHERE id = ? AND status = ?`,
 		string(StatusSuccess), 100, statusMessage, string(encoded), now, now, jobID, string(StatusRunning),
@@ -1199,7 +1199,7 @@ func formatOptionalTime(value *time.Time) *string {
 	if value == nil || value.IsZero() {
 		return nil
 	}
-	formatted := value.Format(time.RFC3339)
+	formatted := value.UTC().Format(time.RFC3339)
 	return &formatted
 }
 

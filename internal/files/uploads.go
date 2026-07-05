@@ -231,7 +231,7 @@ func (h *Handler) HandleTusPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	meta.Offset += written
-	meta.UpdatedAt = time.Now()
+	meta.UpdatedAt = time.Now().UTC()
 	log.Printf("[UPLOAD][PATCH] wrote upload=%s remote=%s chunk=%d duration=%s newOffset=%d/%d", meta.ID, r.RemoteAddr, written, copyDuration, meta.Offset, meta.UploadLength)
 
 	if meta.Offset > meta.UploadLength {
@@ -389,7 +389,7 @@ func buildTusUploadMeta(length int64, raw map[string]string) (*tusUploadMeta, er
 		return nil, fmt.Errorf("storagePoolId is required")
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	return &tusUploadMeta{
 		ID:            idgen.New(),
 		StoragePoolID: storagePoolID,
@@ -434,6 +434,8 @@ func loadTusUploadMeta(uploadID string) (*tusUploadMeta, error) {
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return nil, err
 	}
+	meta.CreatedAt = meta.CreatedAt.UTC()
+	meta.UpdatedAt = meta.UpdatedAt.UTC()
 	return &meta, nil
 }
 

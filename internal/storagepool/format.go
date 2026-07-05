@@ -122,7 +122,7 @@ func FormatPool(ctx context.Context, pool *StoragePool, req FormatRequest) (map[
 		return nil, fmt.Errorf("delete snapshot metadata: %w", err)
 	}
 
-	formattedAt := time.Now()
+	formattedAt := time.Now().UTC()
 	if err := ResetBenchmarkResult(pool.ID, formattedAt); err != nil {
 		return nil, fmt.Errorf("reset benchmark result: %w", err)
 	}

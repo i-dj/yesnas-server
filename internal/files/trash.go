@@ -41,7 +41,7 @@ func (h *Handler) HandleGlobalTagList(w http.ResponseWriter, r *http.Request) {
 			Name:      fav.FileName,
 			Type:      FileType,
 			ParentID:  encodeFilePath(filepath.Dir(fullPath)),
-			UpdatedAt: info.ModTime().Format(time.RFC3339),
+			UpdatedAt: info.ModTime().UTC().Format(time.RFC3339),
 			Size:      info.Size(),
 			Extension: filepath.Ext(fav.FileName),
 			MimeType:  mime.TypeByExtension(filepath.Ext(fav.FileName)),
@@ -124,7 +124,7 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	trashDir := buildTrashDir(storageRecord.MountPath, now)
 	if err := ensureDir(trashDir); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "CREATE_TRASH_DIR_FAILED", "Failed to create trash directory: "+err.Error())
@@ -201,7 +201,7 @@ func buildTrashNode(item RecycleBinItem, storageRoot string) TrashNode {
 		ParentID:     encodeFilePath(filepath.Dir(recycleAbsPath)),
 		OriginalPath: item.OriginalPath,
 		RecyclePath:  item.RecyclePath,
-		DeletedAt:    item.DeletedAt.Format(time.RFC3339),
+		DeletedAt:    item.DeletedAt.UTC().Format(time.RFC3339),
 		Size:         item.Size,
 		Extension:    filepath.Ext(item.FileName),
 		IsHidden:     strings.HasPrefix(item.FileName, "."),
@@ -210,7 +210,7 @@ func buildTrashNode(item RecycleBinItem, storageRoot string) TrashNode {
 		TagColors:    []FavoriteColor{},
 	}
 	if item.ExpiresAt != nil {
-		node.ExpiresAt = item.ExpiresAt.Format(time.RFC3339)
+		node.ExpiresAt = item.ExpiresAt.UTC().Format(time.RFC3339)
 	}
 	if item.FileType == string(FolderType) {
 		node.Type = FolderType

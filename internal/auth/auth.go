@@ -153,7 +153,7 @@ func CreateSession(user *users.User, r *http.Request) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 	expiresAt := now.Add(sessionTTL).Format(time.RFC3339)
 	ipAddress := ""
 	userAgent := ""
@@ -203,7 +203,7 @@ func LookupSession(token string) (*Actor, *Session, error) {
 		return nil, nil, fmt.Errorf("user is disabled")
 	}
 	if item.ExpiresAt != nil && strings.TrimSpace(*item.ExpiresAt) != "" {
-		if expiresAt, err := time.Parse(time.RFC3339, *item.ExpiresAt); err == nil && time.Now().After(expiresAt) {
+		if expiresAt, err := time.Parse(time.RFC3339, *item.ExpiresAt); err == nil && time.Now().UTC().After(expiresAt) {
 			return nil, nil, fmt.Errorf("session is expired")
 		}
 	}
@@ -216,7 +216,7 @@ func LookupSession(token string) (*Actor, *Session, error) {
 }
 
 func RevokeSession(sessionID string) error {
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := database.DB.Exec(`UPDATE user_sessions SET status = ?, updated_at = ?, logged_out_at = ? WHERE id = ?`, sessionStatusRevoked, now, now, strings.TrimSpace(sessionID))
 	return err
 }

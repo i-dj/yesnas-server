@@ -103,6 +103,87 @@ func EnsureStorageTokenSchema() error {
 	return nil
 }
 
+func EnsureOAuthBrokerSchema() error {
+	if DB == nil {
+		return fmt.Errorf("database is not initialized; call InitDB first")
+	}
+	if _, err := DB.Exec(`
+CREATE TABLE IF NOT EXISTS oauth_broker_connection (
+    id                    TEXT PRIMARY KEY,
+    broker_base_url       TEXT NOT NULL UNIQUE,
+    device_id             TEXT NOT NULL,
+    device_name           TEXT DEFAULT '',
+    public_key_pem        TEXT NOT NULL,
+    private_key_pem       TEXT NOT NULL,
+    registered_at         DATETIME,
+    last_auth_at          DATETIME,
+    created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at            DATETIME
+);
+CREATE TABLE IF NOT EXISTS oauth_broker_session (
+    session_id            TEXT PRIMARY KEY,
+    broker_base_url       TEXT NOT NULL,
+    provider              TEXT NOT NULL,
+    storage_id            TEXT DEFAULT '',
+    name                  TEXT DEFAULT '',
+    root_path             TEXT DEFAULT '',
+    status                TEXT DEFAULT 'pending',
+    authorize_url         TEXT DEFAULT '',
+    expires_at            DATETIME,
+    created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at            DATETIME
+);
+CREATE TABLE IF NOT EXISTS oauth_broker_storage_token (
+    id                    TEXT PRIMARY KEY,
+    storage_id            TEXT NOT NULL UNIQUE,
+    broker_base_url       TEXT NOT NULL,
+    provider              TEXT NOT NULL,
+    broker_refresh_token  TEXT NOT NULL,
+    rclone_token_url      TEXT NOT NULL,
+    rclone_config_json    TEXT DEFAULT '',
+    created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at            DATETIME,
+    FOREIGN KEY (storage_id) REFERENCES storage(id) ON DELETE CASCADE
+);
+`); err != nil {
+		return fmt.Errorf("failed to create oauth broker tables: %w", err)
+	}
+	if err := ensureColumns("oauth_broker_connection", map[string]string{
+		"device_name":   "TEXT DEFAULT ''",
+		"registered_at": "DATETIME",
+		"last_auth_at":  "DATETIME",
+		"created_at":    "DATETIME DEFAULT CURRENT_TIMESTAMP",
+		"updated_at":    "DATETIME",
+	}); err != nil {
+		return err
+	}
+	if err := ensureColumns("oauth_broker_session", map[string]string{
+		"storage_id":    "TEXT DEFAULT ''",
+		"name":          "TEXT DEFAULT ''",
+		"root_path":     "TEXT DEFAULT ''",
+		"status":        "TEXT DEFAULT 'pending'",
+		"authorize_url": "TEXT DEFAULT ''",
+		"expires_at":    "DATETIME",
+		"created_at":    "DATETIME DEFAULT CURRENT_TIMESTAMP",
+		"updated_at":    "DATETIME",
+	}); err != nil {
+		return err
+	}
+	if err := ensureColumns("oauth_broker_storage_token", map[string]string{
+		"broker_refresh_token": "TEXT NOT NULL DEFAULT ''",
+		"rclone_token_url":     "TEXT NOT NULL DEFAULT ''",
+		"rclone_config_json":   "TEXT DEFAULT ''",
+		"created_at":           "DATETIME DEFAULT CURRENT_TIMESTAMP",
+		"updated_at":           "DATETIME",
+	}); err != nil {
+		return err
+	}
+	return ensureIndexes([]string{
+		`CREATE INDEX IF NOT EXISTS idx_oauth_broker_session_status ON oauth_broker_session(status, expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_oauth_broker_storage_token_storage_id ON oauth_broker_storage_token(storage_id)`,
+	})
+}
+
 func EnsureStoragePoolSchema() error {
 	if DB == nil {
 		return fmt.Errorf("database is not initialized; call InitDB first")
@@ -208,12 +289,19 @@ func EnsureAuditLogSchema() error {
 		"actor_username":     "TEXT DEFAULT ''",
 		"actor_display_name": "TEXT DEFAULT ''",
 		"ip_address":         "TEXT DEFAULT ''",
+		"ip_type":            "TEXT DEFAULT ''",
+		"country_code":       "TEXT DEFAULT ''",
+		"country":            "TEXT DEFAULT ''",
+		"city":               "TEXT DEFAULT ''",
 		"user_agent":         "TEXT DEFAULT ''",
 		"method":             "TEXT DEFAULT ''",
 		"path":               "TEXT DEFAULT ''",
 		"resource_type":      "TEXT DEFAULT ''",
 		"resource_id":        "TEXT DEFAULT ''",
 		"resource_name":      "TEXT DEFAULT ''",
+		"keyword":            "TEXT DEFAULT ''",
+		"content":            "TEXT DEFAULT ''",
+		"key_data_json":      "TEXT DEFAULT ''",
 		"message":            "TEXT DEFAULT ''",
 		"details_json":       "TEXT DEFAULT ''",
 		"occurred_at":        "DATETIME DEFAULT CURRENT_TIMESTAMP",
@@ -227,6 +315,7 @@ func EnsureAuditLogSchema() error {
 		`CREATE INDEX IF NOT EXISTS idx_audit_logs_source_occurred_at ON audit_logs(source, occurred_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_user_id_occurred_at ON audit_logs(actor_user_id, occurred_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_logs_event_occurred_at ON audit_logs(event, occurred_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_country_city_occurred_at ON audit_logs(country_code, city, occurred_at DESC)`,
 	})
 }
 

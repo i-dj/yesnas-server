@@ -183,7 +183,7 @@ func UpsertCloudPoolRecord(pool StoragePool) error {
 	if pool.ID == "" {
 		return fmt.Errorf("storage pool id is required")
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 	_, err := database.DB.Exec(
 		`INSERT INTO storage_pool (id, storage_id, name, filesystem, raid_level, mount_path, data_path, auto_snapshot_enabled, auto_snapshot_schedule, last_auto_snapshot_at, next_auto_snapshot_at, cache_mode, read_speed_bytes_per_sec, write_speed_bytes_per_sec, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
@@ -218,15 +218,37 @@ func UpsertCloudPoolRecord(pool StoragePool) error {
 }
 
 func UpdateAutoSnapshotQueued(poolID string, next time.Time) error {
-	now := time.Now()
-	_, err := database.DB.Exec(`UPDATE storage_pool SET next_auto_snapshot_at = ?, updated_at = ? WHERE id = ?`, next, now, poolID)
+	now := time.Now().UTC()
+	_, err := database.DB.Exec(`UPDATE storage_pool SET next_auto_snapshot_at = ?, updated_at = ? WHERE id = ?`, next.UTC(), now, poolID)
 	return err
 }
 
 func UpdateAutoSnapshotSuccess(poolID string, last time.Time, next time.Time) error {
-	now := time.Now()
-	_, err := database.DB.Exec(`UPDATE storage_pool SET last_auto_snapshot_at = ?, next_auto_snapshot_at = ?, updated_at = ? WHERE id = ?`, last, next, now, poolID)
+	now := time.Now().UTC()
+	_, err := database.DB.Exec(`UPDATE storage_pool SET last_auto_snapshot_at = ?, next_auto_snapshot_at = ?, updated_at = ? WHERE id = ?`, last.UTC(), next.UTC(), now, poolID)
 	return err
+}
+
+func UpdateAutoSnapshotConfig(poolID string, enabled bool, schedule string, next *time.Time, updatedAt time.Time) error {
+	result, err := database.DB.Exec(
+		`UPDATE storage_pool SET auto_snapshot_enabled = ?, auto_snapshot_schedule = ?, next_auto_snapshot_at = ?, updated_at = ? WHERE id = ?`,
+		boolToInt(enabled),
+		schedule,
+		next,
+		updatedAt.UTC(),
+		poolID,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func UpdateBenchmarkResult(poolID string, readSpeedBytesPerSec float64, writeSpeedBytesPerSec float64, testedAt time.Time) error {
@@ -234,8 +256,8 @@ func UpdateBenchmarkResult(poolID string, readSpeedBytesPerSec float64, writeSpe
 		`UPDATE storage_pool SET read_speed_bytes_per_sec = ?, write_speed_bytes_per_sec = ?, speed_tested_at = ?, updated_at = ? WHERE id = ?`,
 		readSpeedBytesPerSec,
 		writeSpeedBytesPerSec,
-		testedAt,
-		testedAt,
+		testedAt.UTC(),
+		testedAt.UTC(),
 		poolID,
 	)
 	return err
@@ -286,9 +308,10 @@ func DeleteSnapshotRecordsByPool(poolID string) error {
 
 func UpdateSnapshotSystemFields(snapshotID string, systemSnapshotID uint64, systemGeneration uint64) error {
 	_, err := database.DB.Exec(
-		`UPDATE storage_pool_snapshot SET system_snapshot_id = ?, system_generation = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		`UPDATE storage_pool_snapshot SET system_snapshot_id = ?, system_generation = ?, updated_at = ? WHERE id = ?`,
 		systemSnapshotID,
 		systemGeneration,
+		time.Now().UTC(),
 		snapshotID,
 	)
 	return err
@@ -297,7 +320,7 @@ func UpdateSnapshotSystemFields(snapshotID string, systemSnapshotID uint64, syst
 func ResetBenchmarkResult(poolID string, updatedAt time.Time) error {
 	_, err := database.DB.Exec(
 		`UPDATE storage_pool SET read_speed_bytes_per_sec = 0, write_speed_bytes_per_sec = 0, speed_tested_at = NULL, updated_at = ? WHERE id = ?`,
-		updatedAt,
+		updatedAt.UTC(),
 		poolID,
 	)
 	return err

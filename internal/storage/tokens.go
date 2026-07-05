@@ -36,7 +36,7 @@ func UpsertToken(item Token) (string, error) {
 		}
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	_, err := database.DB.Exec(
 		`INSERT INTO storage_token (id, storage_id, token_type, access_token, refresh_token, expiry, scope, raw_json, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)

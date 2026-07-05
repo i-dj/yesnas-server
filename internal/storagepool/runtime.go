@@ -28,7 +28,7 @@ func BuildResponses(ctx context.Context, pools []StoragePool) []Response {
 }
 
 func buildResponse(ctx context.Context, pool StoragePool) Response {
-	now := time.Now()
+	now := time.Now().UTC()
 	resp := Response{StoragePool: pool, Kind: "local", Provider: "btrfs", Status: string(storage.StatusOffline), Health: "offline", Snapshots: []Snapshot{}, Warnings: []string{}, LastCheckedAt: now}
 	mounted := isMountpointActive(pool.MountPath)
 	usagePath := pool.DataPath
@@ -121,28 +121,36 @@ func isCloudStorage(item storage.Storage) bool {
 	if item.Type == storage.Cloud {
 		return true
 	}
-	return strings.TrimSpace(item.Provider) == string(storage.ProviderGoogleDrive)
+	return isCloudProvider(item.Provider)
 }
 
 func isCloudPoolRecord(pool StoragePool) bool {
-	return strings.TrimSpace(pool.Filesystem) == string(storage.ProviderGoogleDrive)
+	return isCloudProvider(pool.Filesystem)
+}
+
+func isCloudProvider(provider string) bool {
+	switch strings.TrimSpace(provider) {
+	case string(storage.ProviderGoogleDrive), string(storage.ProviderOneDrive), string(storage.ProviderDropbox):
+		return true
+	default:
+		return false
+	}
 }
 
 func refreshCloudUsage(ctx context.Context, item *storage.Storage) []string {
 	if item == nil {
 		return nil
 	}
-	switch strings.TrimSpace(item.Provider) {
-	case string(storage.ProviderGoogleDrive):
+	if isCloudProvider(item.Provider) {
 		if _, err := storage.RefreshGoogleDriveUsage(ctx, item); err != nil {
-			return []string{"failed to read google drive usage: " + err.Error()}
+			return []string{"failed to read cloud storage usage: " + err.Error()}
 		}
 	}
 	return nil
 }
 
 func buildCloudResponse(item storage.Storage) Response {
-	now := time.Now()
+	now := time.Now().UTC()
 	mounted := item.Status == storage.StatusOnline
 	if strings.HasPrefix(strings.TrimSpace(item.MountPath), "/") {
 		mounted = isMountpointActive(item.MountPath)
@@ -446,7 +454,8 @@ func mergePoolSnapshots(poolID string, mountPath string, systemSnapshots []Snaps
 			snapshot.Name = meta.Name
 			snapshot.Description = meta.Description
 			snapshot.CreatedBy = meta.CreatedBy
-			snapshot.CreatedAt = &meta.CreatedAt
+			createdAt := meta.CreatedAt
+			snapshot.CreatedAt = &createdAt
 			snapshot.UpdatedAt = meta.UpdatedAt
 			snapshot.IsReadOnly = meta.IsReadOnly
 			snapshot.Registered = true

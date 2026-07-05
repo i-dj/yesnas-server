@@ -66,6 +66,43 @@ type CreateFolderResponse struct {
 	Name     string `json:"name"`
 }
 
+type RenameFileRequest struct {
+	Name string `json:"name"`
+}
+
+type MoveFileRequest struct {
+	ParentID       string `json:"parentId"`
+	Name           string `json:"name,omitempty"`
+	ConflictPolicy string `json:"conflictPolicy,omitempty"`
+}
+
+type CopyFileRequest struct {
+	ParentID       string `json:"parentId"`
+	Name           string `json:"name,omitempty"`
+	ConflictPolicy string `json:"conflictPolicy,omitempty"`
+}
+
+type FileConflictCheckRequest struct {
+	ParentID string `json:"parentId"`
+	Name     string `json:"name,omitempty"`
+}
+
+type FileConflictCheckResponse struct {
+	HasConflict bool          `json:"hasConflict"`
+	Name        string        `json:"name"`
+	ParentID    string        `json:"parentId"`
+	TargetID    string        `json:"targetId,omitempty"`
+	TargetType  *FileNodeType `json:"targetType,omitempty"`
+}
+
+type FileOperationResponse struct {
+	ID       string       `json:"id"`
+	ParentID string       `json:"parentId"`
+	Name     string       `json:"name"`
+	Type     FileNodeType `json:"type"`
+	Path     string       `json:"path"`
+}
+
 type DeleteFileResponse struct {
 	ID           string `json:"id"`
 	StorageID    string `json:"storageId"`

@@ -115,7 +115,7 @@ func CreatePool(ctx context.Context, req CreateRequest) (*StoragePool, error) {
 		return nil, fmt.Errorf("create storage record: %w", err)
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	nextAutoSnapshotAt := initialAutoSnapshotNextRun(req.AutoSnapshotEnabled, autoSnapshotSchedule, now)
 	pool := StoragePool{
 		StorageID:            storageID,
@@ -178,19 +178,19 @@ func NextAutoSnapshotTime(from time.Time, schedule string) time.Time {
 				continue
 			}
 			if _, ok := allowed[candidate.Weekday()]; ok {
-				return candidate
+				return candidate.UTC()
 			}
 		}
 	}
 	switch strings.ToLower(strings.TrimSpace(schedule)) {
 	case "hourly":
-		return base.Truncate(time.Hour).Add(time.Hour)
+		return base.Truncate(time.Hour).Add(time.Hour).UTC()
 	case "daily":
-		return time.Date(base.Year(), base.Month(), base.Day()+1, 0, 0, 0, 0, base.Location())
+		return time.Date(base.Year(), base.Month(), base.Day()+1, 0, 0, 0, 0, base.Location()).UTC()
 	case "monthly":
-		return time.Date(base.Year(), base.Month()+1, 1, 0, 0, 0, 0, base.Location())
+		return time.Date(base.Year(), base.Month()+1, 1, 0, 0, 0, 0, base.Location()).UTC()
 	default:
-		return time.Date(base.Year(), base.Month(), base.Day()+1, 0, 0, 0, 0, base.Location())
+		return time.Date(base.Year(), base.Month(), base.Day()+1, 0, 0, 0, 0, base.Location()).UTC()
 	}
 }
 

@@ -29,12 +29,19 @@ type Entry struct {
 	Success      bool
 	Actor        Actor
 	IPAddress    string
+	IPType       string
+	CountryCode  string
+	Country      string
+	City         string
 	UserAgent    string
 	Method       string
 	Path         string
 	ResourceType string
 	ResourceID   string
 	ResourceName string
+	Keyword      string
+	Content      string
+	KeyData      any
 	Message      string
 	Details      any
 	OccurredAt   string
@@ -52,15 +59,23 @@ type Log struct {
 	ActorUsername    string `db:"actor_username" json:"actorUsername"`
 	ActorDisplayName string `db:"actor_display_name" json:"actorDisplayName"`
 	IPAddress        string `db:"ip_address" json:"ipAddress"`
+	IPType           string `db:"ip_type" json:"ipType"`
+	CountryCode      string `db:"country_code" json:"countryCode"`
+	Country          string `db:"country" json:"country"`
+	City             string `db:"city" json:"city"`
 	UserAgent        string `db:"user_agent" json:"userAgent"`
 	Method           string `db:"method" json:"method"`
 	Path             string `db:"path" json:"path"`
 	ResourceType     string `db:"resource_type" json:"resourceType"`
 	ResourceID       string `db:"resource_id" json:"resourceId"`
 	ResourceName     string `db:"resource_name" json:"resourceName"`
+	Keyword          string `db:"keyword" json:"keyword"`
+	Content          string `db:"content" json:"content"`
+	KeyDataJSON      string `db:"key_data_json" json:"-"`
 	Message          string `db:"message" json:"message"`
 	DetailsJSON      string `db:"details_json" json:"-"`
 	OccurredAt       string `db:"occurred_at" json:"occurredAt"`
+	KeyData          any    `json:"keyData,omitempty"`
 	Details          any    `json:"details,omitempty"`
 }
 
@@ -73,6 +88,9 @@ type ListQuery struct {
 	Event       string
 	ActorUserID string
 	IPAddress   string
+	Country     string
+	City        string
+	Keyword     string
 	Success     *bool
 	Search      string
 	From        string

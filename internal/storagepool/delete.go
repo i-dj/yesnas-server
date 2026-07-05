@@ -39,7 +39,15 @@ func (h *Handler) HandleDeletePool(w http.ResponseWriter, r *http.Request) {
 
 func DeletePool(ctx context.Context, pool *StoragePool, req DeleteRequest) (map[string]any, error) {
 	deletedSnapshots := make([]string, 0)
+	storageRecord, err := storage.Get(pool.StorageID)
+	if err != nil {
+		return nil, fmt.Errorf("load storage record: %w", err)
+	}
+	isCloudPool := storageRecord != nil && isCloudStorage(*storageRecord)
 	if req.WipeDevices {
+		if isCloudPool {
+			return nil, fmt.Errorf("wipe devices is not supported for cloud storage")
+		}
 		systemSubvolumes, _ := readBtrfsSubvolumes(ctx, pool.MountPath)
 		sortSubvolumesDeepestFirst(systemSubvolumes)
 		for _, subvolume := range systemSubvolumes {
@@ -47,6 +55,11 @@ func DeletePool(ctx context.Context, pool *StoragePool, req DeleteRequest) (map[
 				return nil, fmt.Errorf("delete subvolume %s: %w", subvolume.Path, err)
 			}
 			deletedSnapshots = append(deletedSnapshots, subvolume.Path)
+		}
+	}
+	if isCloudPool {
+		if err := storage.CleanupOAuthBrokerCloudStorage(ctx, storageRecord); err != nil {
+			return nil, err
 		}
 	}
 	if isMountpointActive(pool.MountPath) {

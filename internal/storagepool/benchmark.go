@@ -120,7 +120,7 @@ func BenchmarkPoolSync(ctx context.Context, pool *StoragePool, req BenchmarkRequ
 		return nil, err
 	}
 
-	testedAt := time.Now()
+	testedAt := time.Now().UTC()
 	if err := UpdateBenchmarkResult(pool.ID, readSpeed, writeSpeed, testedAt); err != nil {
 		return nil, fmt.Errorf("update storage pool benchmark result: %w", err)
 	}
@@ -174,7 +174,7 @@ func BenchmarkPoolStream(ctx context.Context, pool *StoragePool, req BenchmarkRe
 		return nil, err
 	}
 
-	testedAt := time.Now()
+	testedAt := time.Now().UTC()
 	if err := UpdateBenchmarkResult(pool.ID, readSpeed, writeSpeed, testedAt); err != nil {
 		return nil, fmt.Errorf("update storage pool benchmark result: %w", err)
 	}
@@ -194,7 +194,7 @@ func BenchmarkCloudPoolStream(ctx context.Context, pool *StoragePool, sizeGiB in
 	if err != nil {
 		return nil, fmt.Errorf("load cloud storage: %w", err)
 	}
-	if strings.TrimSpace(storageRecord.Provider) != string(storage.ProviderGoogleDrive) {
+	if !isCloudStorage(*storageRecord) {
 		return nil, fmt.Errorf("cloud benchmark is not supported for provider %s", storageRecord.Provider)
 	}
 	if err := UpsertCloudPoolRecord(cloudStoragePool(*storageRecord)); err != nil {
@@ -216,14 +216,14 @@ func BenchmarkCloudPoolStream(ctx context.Context, pool *StoragePool, sizeGiB in
 			Percent:                 percent,
 			CurrentSpeedBytesPerSec: progress.CurrentSpeedBytesPerSec,
 			ElapsedSeconds:          elapsed,
-			UpdatedAt:               time.Now(),
+			UpdatedAt:               time.Now().UTC(),
 		})
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	testedAt := time.Now()
+	testedAt := time.Now().UTC()
 	if err := UpdateBenchmarkResult(pool.ID, result.ReadSpeedBytesPerSec, result.WriteSpeedBytesPerSec, testedAt); err != nil {
 		return nil, fmt.Errorf("update cloud storage pool benchmark result: %w", err)
 	}
@@ -388,7 +388,7 @@ func runBenchmarkWriteStream(ctx context.Context, poolID string, sizeGiB int, pa
 			Percent:                 float64(completed) * 100 / float64(totalBytes),
 			CurrentSpeedBytesPerSec: currentSpeed,
 			ElapsedSeconds:          elapsed,
-			UpdatedAt:               time.Now(),
+			UpdatedAt:               time.Now().UTC(),
 		}) {
 			return 0, context.Canceled
 		}
@@ -471,7 +471,7 @@ func runBenchmarkReadStream(ctx context.Context, poolID string, sizeGiB int, pat
 			Percent:                 float64(completed) * 100 / float64(totalBytes),
 			CurrentSpeedBytesPerSec: currentSpeed,
 			ElapsedSeconds:          elapsed,
-			UpdatedAt:               time.Now(),
+			UpdatedAt:               time.Now().UTC(),
 		}) {
 			return 0, context.Canceled
 		}

@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,10 +27,6 @@ import (
 )
 
 const (
-	defaultGoogleDriveScope       = "https://www.googleapis.com/auth/drive"
-	defaultGoogleDriveAuthBaseURL = "https://accounts.google.com/o/oauth2/v2/auth"
-	defaultGoogleDriveTokenURL    = "https://oauth2.googleapis.com/token"
-	defaultGoogleDriveOAuthFile   = "oauth/google_drive_web.json"
 	defaultGoogleDriveRcloneFile  = "oauth/rclone.conf"
 	defaultGoogleDriveMountRoot   = "/srv/yesnas/cloud"
 	defaultGoogleDriveUserInfoURL = "https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)"
@@ -41,16 +35,13 @@ const (
 	googleDriveFolderMimeType     = "application/vnd.google-apps.folder"
 )
 
-type GoogleDriveConnectRequest struct {
-	StorageID          string `json:"storageId"`
-	Name               string `json:"name"`
-	RootPath           string `json:"rootPath"`
-	Scope              string `json:"scope"`
-	SuccessRedirectURL string `json:"successRedirectURL"`
-	FailureRedirectURL string `json:"failureRedirectURL"`
+type CloudConnectRequest struct {
+	StorageID string `json:"storageId"`
+	Name      string `json:"name"`
+	RootPath  string `json:"rootPath"`
 }
 
-type GoogleDriveConnectResponse struct {
+type CloudConnectResponse struct {
 	Provider    string `json:"provider"`
 	AuthURL     string `json:"authUrl"`
 	State       string `json:"state"`
@@ -58,23 +49,13 @@ type GoogleDriveConnectResponse struct {
 	ExpiresAt   string `json:"expiresAt"`
 }
 
-type GoogleDriveCallbackResponse struct {
-	Connected        bool    `json:"connected"`
-	Provider         string  `json:"provider"`
-	StorageID        string  `json:"storageId"`
-	Storage          Storage `json:"storage"`
-	RcloneRemoteName string  `json:"rcloneRemoteName"`
-}
-
-type googleDriveOAuthState struct {
-	StorageID          string
-	Name               string
-	RootPath           string
-	Scope              string
-	SuccessRedirectURL string
-	FailureRedirectURL string
-	RedirectURL        string
-	ExpiresAt          time.Time
+type CloudConnectCompleteResponse struct {
+	Connected        bool     `json:"connected"`
+	Provider         string   `json:"provider"`
+	StorageID        string   `json:"storageId"`
+	Storage          Storage  `json:"storage"`
+	RcloneRemoteName string   `json:"rcloneRemoteName"`
+	Warnings         []string `json:"warnings,omitempty"`
 }
 
 type googleDriveTokenResponse struct {
@@ -139,362 +120,14 @@ type rcloneAboutResponse struct {
 	Other   int64 `json:"other"`
 }
 
-type googleOAuthClientFile struct {
-	Web googleOAuthClientWeb `json:"web"`
-}
-
-type googleOAuthClientWeb struct {
-	ClientID     string   `json:"client_id"`
-	ClientSecret string   `json:"client_secret"`
-	RedirectURIs []string `json:"redirect_uris"`
-}
-
-type googleOAuthClientConfig struct {
-	ClientID     string
-	ClientSecret string
-	RedirectURL  string
-}
-
-var googleDriveStateStore = struct {
-	mu    sync.Mutex
-	items map[string]googleDriveOAuthState
-}{
-	items: map[string]googleDriveOAuthState{},
-}
-
-var (
-	defaultGoogleDriveOAuthFilePath  = resolveProjectPath(defaultGoogleDriveOAuthFile)
-	defaultGoogleDriveRcloneFilePath = resolveProjectPath(defaultGoogleDriveRcloneFile)
-)
-
-func StartGoogleDriveOAuth(r *http.Request, req GoogleDriveConnectRequest) (*GoogleDriveConnectResponse, error) {
-	clientConfig, err := loadGoogleOAuthClientConfig("")
-	if err != nil {
-		return nil, err
-	}
-
-	redirectURL := strings.TrimSpace(clientConfig.RedirectURL)
-	if redirectURL == "" {
-		redirectURL = inferGoogleDriveRedirectURL(r)
-	}
-
-	scope := strings.TrimSpace(req.Scope)
-	if scope == "" {
-		scope = defaultGoogleDriveScope
-	}
-
-	state, err := newGoogleDriveStateToken()
-	if err != nil {
-		return nil, fmt.Errorf("generate oauth state: %w", err)
-	}
-
-	expiresAt := time.Now().Add(10 * time.Minute)
-	googleDriveStateStore.mu.Lock()
-	googleDriveStateStore.items[state] = googleDriveOAuthState{
-		StorageID:          strings.TrimSpace(req.StorageID),
-		Name:               strings.TrimSpace(req.Name),
-		RootPath:           normalizeGoogleDriveRootPath(req.RootPath),
-		Scope:              scope,
-		SuccessRedirectURL: strings.TrimSpace(req.SuccessRedirectURL),
-		FailureRedirectURL: strings.TrimSpace(req.FailureRedirectURL),
-		RedirectURL:        redirectURL,
-		ExpiresAt:          expiresAt,
-	}
-	googleDriveStateStore.mu.Unlock()
-
-	authURL, err := buildGoogleDriveAuthURL(clientConfig.ClientID, redirectURL, state, scope)
-	if err != nil {
-		return nil, err
-	}
-
-	return &GoogleDriveConnectResponse{
-		Provider:    string(ProviderGoogleDrive),
-		AuthURL:     authURL,
-		State:       state,
-		RedirectURL: redirectURL,
-		ExpiresAt:   expiresAt.Format(time.RFC3339),
-	}, nil
-}
-
-func CompleteGoogleDriveOAuth(ctx context.Context, code string, state string) (*GoogleDriveCallbackResponse, string, error) {
-	code = strings.TrimSpace(code)
-	state = strings.TrimSpace(state)
-	if code == "" {
-		return nil, "", fmt.Errorf("authorization code is required")
-	}
-	if state == "" {
-		return nil, "", fmt.Errorf("state is required")
-	}
-
-	stateData, ok := consumeGoogleDriveState(state)
-	if !ok {
-		return nil, "", fmt.Errorf("oauth state is invalid or expired")
-	}
-
-	tokenResp, err := exchangeGoogleDriveCode(ctx, code, stateData.RedirectURL)
-	if err != nil {
-		return nil, stateData.FailureRedirectURL, err
-	}
-
-	accountEmail, err := fetchGoogleDriveAccountEmail(ctx, tokenResp.AccessToken)
-	if err != nil {
-		return nil, stateData.FailureRedirectURL, err
-	}
-
-	storageID, item, err := createOrReconnectGoogleDriveStorage(ctx, stateData, tokenResp, accountEmail)
-	if err != nil {
-		return nil, stateData.FailureRedirectURL, err
-	}
-
-	rcloneRemoteName := googleDriveRemoteName(storageID)
-	extraConfig := BuildExtraConfig(map[string]any{
-		"backend":          "drive",
-		"provider":         string(ProviderGoogleDrive),
-		"rcloneRemoteName": rcloneRemoteName,
-		"scope":            stateData.Scope,
-		"rootPath":         stateData.RootPath,
-		"redirectURL":      stateData.RedirectURL,
-	})
-	if err := UpdateRuntime(storageID, item.MountPath, item.Status, item.TotalSize, item.FreeSize, extraConfig); err != nil {
-		return nil, stateData.FailureRedirectURL, fmt.Errorf("update google drive storage config: %w", err)
-	}
-	item.ExtraConfig = extraConfig
-
-	expiry := tokenExpiryString(tokenResp)
-	rawJSON, _ := json.Marshal(map[string]any{
-		"access_token":  tokenResp.AccessToken,
-		"refresh_token": tokenResp.RefreshToken,
-		"token_type":    tokenResp.TokenType,
-		"scope":         tokenResp.Scope,
-		"expiry":        expiry,
-	})
-	if _, err := UpsertToken(Token{
-		StorageID:    storageID,
-		TokenType:    tokenResp.TokenType,
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: tokenResp.RefreshToken,
-		Expiry:       stringPtr(expiry),
-		Scope:        firstNonEmpty(strings.TrimSpace(tokenResp.Scope), stateData.Scope),
-		RawJSON:      string(rawJSON),
-	}); err != nil {
-		_ = Delete(storageID)
-		return nil, stateData.FailureRedirectURL, fmt.Errorf("save google drive token: %w", err)
-	}
-
-	token, err := GetTokenByStorageID(storageID)
-	if err != nil || token == nil {
-		_ = DeleteTokenByStorageID(storageID)
-		_ = Delete(storageID)
-		return nil, stateData.FailureRedirectURL, fmt.Errorf("load google drive token for mount: %w", err)
-	}
-
-	if err := EnsureGoogleDriveMounted(ctx, &item, token); err != nil {
-		_ = DeleteTokenByStorageID(storageID)
-		_ = Delete(storageID)
-		return nil, stateData.FailureRedirectURL, err
-	}
-
-	return &GoogleDriveCallbackResponse{
-		Connected:        true,
-		Provider:         string(ProviderGoogleDrive),
-		StorageID:        storageID,
-		Storage:          item,
-		RcloneRemoteName: rcloneRemoteName,
-	}, stateData.SuccessRedirectURL, nil
-}
-
-func BuildGoogleDriveRcloneConfig(item Storage, token Token) map[string]any {
-	clientConfig, _ := loadGoogleOAuthClientConfig("")
-	config := map[string]any{
-		"type":          "drive",
-		"scope":         "drive",
-		"client_id":     clientConfig.ClientID,
-		"client_secret": clientConfig.ClientSecret,
-		"token": map[string]any{
-			"access_token":  token.AccessToken,
-			"refresh_token": token.RefreshToken,
-			"token_type":    token.TokenType,
-			"expiry":        derefString(token.Expiry),
-		},
-	}
-	if rootPath := strings.TrimSpace(item.RootPath); rootPath != "" && rootPath != "root" {
-		config["root_folder_id"] = rootPath
-	}
-	return config
-}
-
-func buildGoogleDriveAuthURL(clientID string, redirectURL string, state string, scope string) (string, error) {
-	values := url.Values{}
-	values.Set("client_id", clientID)
-	values.Set("redirect_uri", redirectURL)
-	values.Set("response_type", "code")
-	values.Set("scope", scope)
-	values.Set("state", state)
-	values.Set("access_type", "offline")
-	values.Set("prompt", "consent")
-	values.Set("include_granted_scopes", "true")
-
-	parsed, err := url.Parse(defaultGoogleDriveAuthBaseURL)
-	if err != nil {
-		return "", fmt.Errorf("build google drive auth url: %w", err)
-	}
-	parsed.RawQuery = values.Encode()
-	return parsed.String(), nil
-}
-
-func exchangeGoogleDriveCode(ctx context.Context, code string, redirectURL string) (*googleDriveTokenResponse, error) {
-	clientConfig, err := loadGoogleOAuthClientConfig(redirectURL)
-	if err != nil {
-		return nil, err
-	}
-
-	values := url.Values{}
-	values.Set("code", code)
-	values.Set("client_id", clientConfig.ClientID)
-	values.Set("client_secret", clientConfig.ClientSecret)
-	values.Set("redirect_uri", redirectURL)
-	values.Set("grant_type", "authorization_code")
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, defaultGoogleDriveTokenURL, strings.NewReader(values.Encode()))
-	if err != nil {
-		return nil, fmt.Errorf("build google drive token request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("exchange google drive code: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("google drive token exchange failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	var tokenResp googleDriveTokenResponse
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, fmt.Errorf("decode google drive token response: %w", err)
-	}
-	if strings.TrimSpace(tokenResp.AccessToken) == "" {
-		return nil, fmt.Errorf("google drive token response does not include access_token")
-	}
-	return &tokenResp, nil
-}
-
-func createGoogleDriveStorage(stateData googleDriveOAuthState, tokenResp *googleDriveTokenResponse, accountEmail string) (string, Storage, error) {
-	storageID := idgen.New()
-	rootPath := normalizeGoogleDriveRootPath(stateData.RootPath)
-	name := strings.TrimSpace(stateData.Name)
-	if name == "" {
-		name = "Google Drive"
-	}
-
-	item := Storage{
-		ID:        storageID,
-		Name:      name,
-		Location:  "cloud",
-		MountPath: googleDriveMountPath(storageID),
-		Type:      Cloud,
-		Provider:  string(ProviderGoogleDrive),
-		URL:       "https://www.googleapis.com/drive/v3",
-		Username:  strings.TrimSpace(accountEmail),
-		RootPath:  rootPath,
-		Status:    StatusOnline,
-		ExtraConfig: BuildExtraConfig(map[string]any{
-			"backend":          "drive",
-			"provider":         string(ProviderGoogleDrive),
-			"rcloneRemoteName": googleDriveRemoteName(storageID),
-			"scope":            firstNonEmpty(strings.TrimSpace(tokenResp.Scope), stateData.Scope),
-			"rootPath":         rootPath,
-			"redirectURL":      stateData.RedirectURL,
-		}),
-	}
-
-	if _, err := Add(item); err != nil {
-		return "", Storage{}, fmt.Errorf("create google drive storage: %w", err)
-	}
-
-	return storageID, item, nil
-}
-
-func createOrReconnectGoogleDriveStorage(ctx context.Context, stateData googleDriveOAuthState, tokenResp *googleDriveTokenResponse, accountEmail string) (string, Storage, error) {
-	if strings.TrimSpace(stateData.StorageID) == "" {
-		return createGoogleDriveStorage(stateData, tokenResp, accountEmail)
-	}
-	return reconnectGoogleDriveStorage(ctx, stateData, tokenResp, accountEmail)
-}
-
-func reconnectGoogleDriveStorage(ctx context.Context, stateData googleDriveOAuthState, tokenResp *googleDriveTokenResponse, accountEmail string) (string, Storage, error) {
-	storageID := strings.TrimSpace(stateData.StorageID)
-	item, err := Get(storageID)
-	if err != nil {
-		return "", Storage{}, fmt.Errorf("load google drive storage for reconnect: %w", err)
-	}
-	if item == nil || item.Provider != string(ProviderGoogleDrive) {
-		return "", Storage{}, fmt.Errorf("google drive storage not found")
-	}
-
-	if strings.TrimSpace(item.RootPath) == "" {
-		item.RootPath = normalizeGoogleDriveRootPath(stateData.RootPath)
-	}
-	if strings.TrimSpace(item.MountPath) == "" {
-		item.MountPath = googleDriveMountPath(storageID)
-	}
-	item.Username = strings.TrimSpace(accountEmail)
-	item.Status = StatusOnline
-	item.ExtraConfig = BuildExtraConfig(map[string]any{
-		"backend":          "drive",
-		"provider":         string(ProviderGoogleDrive),
-		"rcloneRemoteName": googleDriveRemoteName(storageID),
-		"scope":            firstNonEmpty(strings.TrimSpace(tokenResp.Scope), stateData.Scope),
-		"rootPath":         item.RootPath,
-		"redirectURL":      stateData.RedirectURL,
-	})
-
-	if err := UpdateIdentity(storageID, item.Username); err != nil {
-		return "", Storage{}, fmt.Errorf("update google drive account identity: %w", err)
-	}
-	if err := UpdateRuntime(storageID, item.MountPath, item.Status, item.TotalSize, item.FreeSize, item.ExtraConfig); err != nil {
-		return "", Storage{}, fmt.Errorf("update google drive runtime config: %w", err)
-	}
-
-	expiry := tokenExpiryString(tokenResp)
-	rawJSON, _ := json.Marshal(map[string]any{
-		"access_token":  tokenResp.AccessToken,
-		"refresh_token": tokenResp.RefreshToken,
-		"token_type":    tokenResp.TokenType,
-		"scope":         tokenResp.Scope,
-		"expiry":        expiry,
-	})
-	if _, err := UpsertToken(Token{
-		StorageID:    storageID,
-		TokenType:    tokenResp.TokenType,
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: tokenResp.RefreshToken,
-		Expiry:       stringPtr(expiry),
-		Scope:        firstNonEmpty(strings.TrimSpace(tokenResp.Scope), stateData.Scope),
-		RawJSON:      string(rawJSON),
-	}); err != nil {
-		return "", Storage{}, fmt.Errorf("save google drive token: %w", err)
-	}
-
-	token, err := GetTokenByStorageID(storageID)
-	if err != nil || token == nil {
-		return "", Storage{}, fmt.Errorf("load google drive token for mount: %w", err)
-	}
-	if err := EnsureGoogleDriveMounted(ctx, item, token); err != nil {
-		return "", Storage{}, err
-	}
-	return storageID, *item, nil
-}
+var defaultGoogleDriveRcloneFilePath = resolveProjectPath(defaultGoogleDriveRcloneFile)
 
 func EnsureGoogleDriveMounted(ctx context.Context, item *Storage, token *Token) error {
-	if item == nil || token == nil || item.Provider != string(ProviderGoogleDrive) {
+	if item == nil || token == nil || !isOAuthBrokerCloudProvider(item.Provider) {
 		return nil
 	}
 
-	desiredMountPath := googleDriveMountPath(item.ID)
+	desiredMountPath := cloudMountPath(item.Provider, item.ID)
 	if strings.TrimSpace(item.MountPath) == "" || !strings.HasPrefix(strings.TrimSpace(item.MountPath), "/") {
 		item.MountPath = desiredMountPath
 	}
@@ -535,7 +168,7 @@ func EnsureGoogleDriveMounted(ctx context.Context, item *Storage, token *Token) 
 		return fmt.Errorf("prepare google drive mount path: %w", err)
 	}
 
-	remote := googleDriveRemoteName(item.ID) + ":"
+	remote := cloudRemoteName(item.Provider, item.ID) + ":"
 	if err := mountGoogleDrive(ctx, remote, item.MountPath); err != nil {
 		_ = UpdateRuntime(item.ID, item.MountPath, StatusError, item.TotalSize, item.FreeSize, item.ExtraConfig)
 		item.Status = StatusError
@@ -611,10 +244,10 @@ func BackfillGoogleDriveAccountEmail(ctx context.Context, item *Storage) {
 }
 
 func RefreshGoogleDriveUsage(ctx context.Context, item *Storage) (*CloudUsage, error) {
-	if item == nil || item.Provider != string(ProviderGoogleDrive) {
-		return nil, fmt.Errorf("google drive storage is required")
+	if item == nil || !isOAuthBrokerCloudProvider(item.Provider) {
+		return nil, fmt.Errorf("cloud storage is required")
 	}
-	remote := googleDriveRemoteName(item.ID) + ":"
+	remote := cloudRemoteName(item.Provider, item.ID) + ":"
 	result, err := commandrunner.RunWithOptions(
 		ctx,
 		commandrunner.Options{},
@@ -625,11 +258,11 @@ func RefreshGoogleDriveUsage(ctx context.Context, item *Storage) (*CloudUsage, e
 		"--config", defaultGoogleDriveRcloneFilePath,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("rclone about google drive: %w", err)
+		return nil, fmt.Errorf("rclone about cloud storage: %w", err)
 	}
 	var about rcloneAboutResponse
 	if err := json.Unmarshal([]byte(result.Stdout), &about); err != nil {
-		return nil, fmt.Errorf("decode rclone about google drive: %w", err)
+		return nil, fmt.Errorf("decode rclone about cloud storage: %w", err)
 	}
 	usage := &CloudUsage{
 		TotalBytes: about.Total,
@@ -652,8 +285,8 @@ func RefreshGoogleDriveUsage(ctx context.Context, item *Storage) (*CloudUsage, e
 }
 
 func BenchmarkGoogleDrive(ctx context.Context, item *Storage, sizeBytes int64, emit func(CloudBenchmarkProgress) bool) (*CloudBenchmarkResult, error) {
-	if item == nil || item.Provider != string(ProviderGoogleDrive) {
-		return nil, fmt.Errorf("google drive storage is required")
+	if item == nil || !isOAuthBrokerCloudProvider(item.Provider) {
+		return nil, fmt.Errorf("cloud storage is required")
 	}
 	if sizeBytes <= 0 {
 		return nil, fmt.Errorf("benchmark size must be greater than 0")
@@ -693,7 +326,7 @@ func BenchmarkGoogleDrive(ctx context.Context, item *Storage, sizeBytes int64, e
 	defer os.Remove(downloadPath)
 
 	remotePath := ".yesnas-benchmark-" + idgen.New() + ".tmp"
-	remote := googleDriveRemoteName(item.ID) + ":" + remotePath
+	remote := cloudRemoteName(item.Provider, item.ID) + ":" + remotePath
 	defer func() {
 		_, _ = commandrunner.RunWithOptions(context.Background(), commandrunner.Options{}, "rclone", "deletefile", remote, "--config", defaultGoogleDriveRcloneFilePath)
 	}()
@@ -1051,43 +684,6 @@ func UploadGoogleDriveReader(ctx context.Context, item *Storage, targetPath stri
 	return fmt.Errorf("google drive upload failed after retry")
 }
 
-func consumeGoogleDriveState(state string) (googleDriveOAuthState, bool) {
-	googleDriveStateStore.mu.Lock()
-	defer googleDriveStateStore.mu.Unlock()
-
-	item, ok := googleDriveStateStore.items[state]
-	if !ok {
-		return googleDriveOAuthState{}, false
-	}
-	delete(googleDriveStateStore.items, state)
-	if time.Now().After(item.ExpiresAt) {
-		return googleDriveOAuthState{}, false
-	}
-	return item, true
-}
-
-func newGoogleDriveStateToken() (string, error) {
-	buf := make([]byte, 24)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
-}
-
-func inferGoogleDriveRedirectURL(r *http.Request) string {
-	scheme := "http"
-	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
-		scheme = forwarded
-	} else if r.TLS != nil {
-		scheme = "https"
-	}
-	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
-	if host == "" {
-		host = r.Host
-	}
-	return fmt.Sprintf("%s://%s/api/v1/storages/google-drive/callback", scheme, host)
-}
-
 func normalizeGoogleDriveRootPath(value string) string {
 	clean := strings.TrimSpace(value)
 	if clean == "" {
@@ -1096,12 +692,13 @@ func normalizeGoogleDriveRootPath(value string) string {
 	return clean
 }
 
-func googleDriveRemoteName(storageID string) string {
-	return "gdrive_" + storageID
-}
-
-func googleDriveMountPath(storageID string) string {
-	return filepath.Join(defaultGoogleDriveMountRoot, googleDriveRemoteName(storageID))
+func isOAuthBrokerCloudProvider(provider string) bool {
+	switch strings.TrimSpace(provider) {
+	case string(ProviderGoogleDrive), string(ProviderOneDrive), string(ProviderDropbox):
+		return true
+	default:
+		return false
+	}
 }
 
 func tokenExpiryString(tokenResp *googleDriveTokenResponse) string {
@@ -1309,18 +906,25 @@ func refreshGoogleDriveToken(ctx context.Context, storageID string, token *Token
 		return nil, fmt.Errorf("google drive refresh token is missing")
 	}
 
-	clientConfig, err := loadGoogleOAuthClientConfig("")
-	if err != nil {
-		return nil, err
+	refreshURL := ""
+	if brokerToken, err := getOAuthBrokerStorageToken(storageID); err == nil && brokerToken != nil {
+		refreshURL = brokerToken.RcloneTokenURL
+	}
+	if refreshURL == "" && strings.TrimSpace(token.RawJSON) != "" {
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(token.RawJSON), &raw); err == nil {
+			refreshURL = stringFromAny(raw["token_url"])
+		}
 	}
 
 	values := url.Values{}
-	values.Set("client_id", clientConfig.ClientID)
-	values.Set("client_secret", clientConfig.ClientSecret)
 	values.Set("refresh_token", refreshToken)
 	values.Set("grant_type", "refresh_token")
+	if refreshURL == "" {
+		return nil, fmt.Errorf("oauth broker rclone token_url is missing")
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, defaultGoogleDriveTokenURL, strings.NewReader(values.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, refreshURL, strings.NewReader(values.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("build google drive refresh request: %w", err)
 	}
@@ -1361,6 +965,7 @@ func refreshGoogleDriveToken(ctx context.Context, storageID string, token *Token
 		"token_type":    updated.TokenType,
 		"scope":         updated.Scope,
 		"expiry":        expiry,
+		"token_url":     refreshURL,
 	})
 	updated.RawJSON = string(rawJSON)
 
@@ -1399,43 +1004,6 @@ func derefString(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func loadGoogleOAuthClientConfig(expectedRedirectURL string) (googleOAuthClientConfig, error) {
-	content, err := os.ReadFile(defaultGoogleDriveOAuthFilePath)
-	if err != nil {
-		return googleOAuthClientConfig{}, fmt.Errorf("read google drive credentials file %s: %w", defaultGoogleDriveOAuthFilePath, err)
-	}
-
-	var payload googleOAuthClientFile
-	if err := json.Unmarshal(content, &payload); err != nil {
-		return googleOAuthClientConfig{}, fmt.Errorf("decode google drive credentials file: %w", err)
-	}
-	if strings.TrimSpace(payload.Web.ClientID) == "" || strings.TrimSpace(payload.Web.ClientSecret) == "" {
-		return googleOAuthClientConfig{}, fmt.Errorf("google drive credentials file is missing client_id or client_secret")
-	}
-
-	config := googleOAuthClientConfig{
-		ClientID:     strings.TrimSpace(payload.Web.ClientID),
-		ClientSecret: strings.TrimSpace(payload.Web.ClientSecret),
-		RedirectURL:  selectGoogleRedirectURI(payload.Web.RedirectURIs, expectedRedirectURL),
-	}
-	return config, nil
-}
-
-func selectGoogleRedirectURI(values []string, expected string) string {
-	expected = strings.TrimSpace(expected)
-	if expected != "" {
-		for _, value := range values {
-			if strings.TrimSpace(value) == expected {
-				return expected
-			}
-		}
-	}
-	if len(values) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(values[0])
 }
 
 func ensureGoogleDriveMountPath(ctx context.Context, mountPath string) error {
@@ -1477,6 +1045,25 @@ func upsertGoogleDriveRcloneConfig(item Storage, token Token) error {
 		return err
 	}
 
+	rcloneType := "drive"
+	scope := "drive"
+	clientID := ""
+	clientSecret := ""
+	tokenURL := ""
+	if strings.TrimSpace(token.RawJSON) != "" {
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(token.RawJSON), &raw); err == nil {
+			rcloneType = firstNonEmpty(stringFromAny(raw["type"]), rcloneType)
+			scope = firstNonEmpty(stringFromAny(raw["scope"]), scope)
+			clientID = stringFromAny(raw["client_id"])
+			clientSecret = stringFromAny(raw["client_secret"])
+			tokenURL = stringFromAny(raw["token_url"])
+		}
+	}
+	if brokerToken, err := getOAuthBrokerStorageToken(item.ID); err == nil && brokerToken != nil {
+		tokenURL = firstNonEmpty(brokerToken.RcloneTokenURL, tokenURL)
+	}
+
 	tokenJSON, err := json.Marshal(map[string]any{
 		"access_token":  token.AccessToken,
 		"refresh_token": token.RefreshToken,
@@ -1487,20 +1074,26 @@ func upsertGoogleDriveRcloneConfig(item Storage, token Token) error {
 		return err
 	}
 
-	clientConfig, err := loadGoogleOAuthClientConfig("")
-	if err != nil {
-		return err
+	if tokenURL == "" {
+		return fmt.Errorf("oauth broker rclone token_url is missing")
 	}
 
 	var builder strings.Builder
-	section := googleDriveRemoteName(item.ID)
+	section := cloudRemoteName(item.Provider, item.ID)
 	builder.WriteString("[" + section + "]\n")
-	builder.WriteString("type = drive\n")
-	builder.WriteString("scope = drive\n")
-	builder.WriteString("client_id = " + clientConfig.ClientID + "\n")
-	builder.WriteString("client_secret = " + clientConfig.ClientSecret + "\n")
+	builder.WriteString("type = " + rcloneType + "\n")
+	builder.WriteString("scope = " + scope + "\n")
+	if clientID != "" {
+		builder.WriteString("client_id = " + clientID + "\n")
+	}
+	if clientSecret != "" {
+		builder.WriteString("client_secret = " + clientSecret + "\n")
+	}
+	if tokenURL != "" {
+		builder.WriteString("token_url = " + tokenURL + "\n")
+	}
 	builder.WriteString("token = " + string(tokenJSON) + "\n")
-	if rootPath := strings.TrimSpace(item.RootPath); rootPath != "" && rootPath != "root" {
+	if rootPath := strings.TrimSpace(item.RootPath); item.Provider == string(ProviderGoogleDrive) && rootPath != "" && rootPath != "root" {
 		builder.WriteString("root_folder_id = " + rootPath + "\n")
 	}
 
@@ -1509,6 +1102,45 @@ func upsertGoogleDriveRcloneConfig(item Storage, token Token) error {
 		return err
 	}
 	updated := upsertINISection(string(content), section, strings.TrimSpace(builder.String()))
+	return os.WriteFile(defaultGoogleDriveRcloneFilePath, []byte(updated), 0o600)
+}
+
+func CleanupOAuthBrokerCloudStorage(ctx context.Context, item *Storage) error {
+	if item == nil || !isOAuthBrokerCloudProvider(item.Provider) {
+		return nil
+	}
+	mountPath := strings.TrimSpace(item.MountPath)
+	if mountPath != "" {
+		if mounted, _ := googleDriveMountStatus(ctx, mountPath); mounted {
+			if err := unmountGoogleDrive(ctx, mountPath); err != nil {
+				return err
+			}
+		}
+	}
+	if err := removeGoogleDriveRcloneConfig(item.Provider, item.ID); err != nil {
+		return fmt.Errorf("remove rclone config: %w", err)
+	}
+	if err := DeleteTokenByStorageID(item.ID); err != nil {
+		return fmt.Errorf("delete storage token: %w", err)
+	}
+	if err := deleteOAuthBrokerStorageToken(item.ID); err != nil {
+		return fmt.Errorf("delete oauth broker storage token: %w", err)
+	}
+	if err := deleteOAuthBrokerSessionsByStorageID(item.ID); err != nil {
+		return fmt.Errorf("delete oauth broker sessions: %w", err)
+	}
+	return nil
+}
+
+func removeGoogleDriveRcloneConfig(provider string, storageID string) error {
+	content, err := os.ReadFile(defaultGoogleDriveRcloneFilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	updated := removeINISection(string(content), cloudRemoteName(provider, storageID))
 	return os.WriteFile(defaultGoogleDriveRcloneFilePath, []byte(updated), 0o600)
 }
 
@@ -1540,6 +1172,37 @@ func upsertINISection(content string, sectionName string, replacement string) st
 	merged = append(merged, strings.Split(replacement, "\n")...)
 	merged = append(merged, lines[end:]...)
 	return strings.TrimSpace(strings.Join(merged, "\n")) + "\n"
+}
+
+func removeINISection(content string, sectionName string) string {
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	header := "[" + sectionName + "]"
+	start := -1
+	end := len(lines)
+	for i, line := range lines {
+		if strings.TrimSpace(line) == header {
+			start = i
+			continue
+		}
+		if start >= 0 && strings.HasPrefix(strings.TrimSpace(line), "[") && strings.HasSuffix(strings.TrimSpace(line), "]") {
+			end = i
+			break
+		}
+	}
+	if start < 0 {
+		return strings.TrimSpace(content) + "\n"
+	}
+	merged := make([]string, 0, len(lines)-(end-start))
+	merged = append(merged, lines[:start]...)
+	merged = append(merged, lines[end:]...)
+	trimmed := strings.TrimSpace(strings.Join(merged, "\n"))
+	if trimmed == "" {
+		return ""
+	}
+	return trimmed + "\n"
 }
 
 func isGoogleDriveMounted(ctx context.Context, mountPath string) bool {

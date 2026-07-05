@@ -11,6 +11,11 @@ type CreateRequest struct {
 	AutoSnapshotSchedule string   `json:"autoSnapshotSchedule,omitempty"`
 }
 
+type UpdateRequest struct {
+	AutoSnapshotEnabled  bool   `json:"autoSnapshotEnabled"`
+	AutoSnapshotSchedule string `json:"autoSnapshotSchedule"`
+}
+
 type AutoSnapshotSchedule string
 
 type DeleteRequest struct {

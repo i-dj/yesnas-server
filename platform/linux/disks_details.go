@@ -101,7 +101,10 @@ type ataSmartRawData struct {
 }
 
 type nvmeSmartHealthInfo struct {
-	Temperature int `json:"temperature"`
+	Temperature     int    `json:"temperature"`
+	PercentageUsed  uint64 `json:"percentage_used"`
+	UnsafeShutdowns uint64 `json:"unsafe_shutdowns"`
+	PowerCycles     uint64 `json:"power_cycles"`
 }
 
 type smartMessage struct {
@@ -143,12 +146,12 @@ func ListDisks(ctx context.Context) (pkgdisks.DiskList, error) {
 
 	return pkgdisks.DiskList{
 		Items:       items,
-		GeneratedAt: time.Now(),
+		GeneratedAt: time.Now().UTC(),
 	}, nil
 }
 
 func buildDiskInfo(ctx context.Context, device lsblkDevice, poolUsageByDevice map[string][]pkgdisks.DiskUsage) pkgdisks.DiskInfo {
-	sampledAt := time.Now()
+	sampledAt := time.Now().UTC()
 	info := pkgdisks.DiskInfo{
 		Path:        device.Path,
 		Name:        device.Name,
@@ -515,6 +518,17 @@ func applySMART(info *pkgdisks.DiskInfo, smart smartctlResponse) {
 	if smart.PowerCycleCount > 0 {
 		count := smart.PowerCycleCount
 		info.PowerCycleCount = &count
+		info.PowerOnCount = &count
+	} else if smart.NVMeSmartHealthInformationLog.PowerCycles > 0 {
+		count := smart.NVMeSmartHealthInformationLog.PowerCycles
+		info.PowerCycleCount = &count
+		info.PowerOnCount = &count
+	}
+	if unsafeShutdowns := detectUnsafeShutdownCount(smart); unsafeShutdowns != nil {
+		info.UnsafeShutdownCount = unsafeShutdowns
+	}
+	if healthPercent := detectHealthPercent(smart); healthPercent != nil {
+		info.HealthPercent = healthPercent
 	}
 
 	if info.TemperatureC == nil {
@@ -586,6 +600,66 @@ func detectTemperature(smart smartctlResponse) *int {
 	}
 
 	return nil
+}
+
+func detectUnsafeShutdownCount(smart smartctlResponse) *uint64 {
+	if smart.NVMeSmartHealthInformationLog.UnsafeShutdowns > 0 {
+		value := smart.NVMeSmartHealthInformationLog.UnsafeShutdowns
+		return &value
+	}
+	for _, attr := range smart.ATASmartAttributes.Table {
+		name := strings.ToLower(strings.TrimSpace(attr.Name))
+		switch name {
+		case "unsafe_shutdown_count", "unsafe_shutdowns", "unexpected_power_loss", "power_loss_protection_failure":
+			value := attr.Raw.Value
+			return &value
+		}
+	}
+	return nil
+}
+
+func detectHealthPercent(smart smartctlResponse) *int {
+	if smart.NVMeSmartHealthInformationLog.PercentageUsed > 0 {
+		value := 100 - int(smart.NVMeSmartHealthInformationLog.PercentageUsed)
+		return intPtr(clampInt(value, 0, 100))
+	}
+	for _, attr := range smart.ATASmartAttributes.Table {
+		name := strings.ToLower(strings.TrimSpace(attr.Name))
+		switch name {
+		case "percent_lifetime_remain", "ssd_life_left", "remaining_lifetime_perc", "remaining_lifetime_percent", "available_reserved_space":
+			value := attr.Value
+			if attr.Raw.Value > 0 && attr.Raw.Value <= 100 {
+				value = int(attr.Raw.Value)
+			}
+			return intPtr(clampInt(value, 0, 100))
+		case "media_wearout_indicator":
+			return intPtr(clampInt(attr.Value, 0, 100))
+		case "percentage_used", "wear_leveling_count", "wear_leveling_count_delta":
+			value := int(attr.Raw.Value)
+			if value <= 0 {
+				value = 100 - attr.Value
+			}
+			return intPtr(clampInt(100-value, 0, 100))
+		}
+	}
+	if smart.SmartStatus.Passed {
+		return intPtr(100)
+	}
+	return intPtr(0)
+}
+
+func intPtr(value int) *int {
+	return &value
+}
+
+func clampInt(value int, min int, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 func deviceIsSystemDisk(device lsblkDevice) bool {

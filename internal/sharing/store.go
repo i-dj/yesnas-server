@@ -65,7 +65,7 @@ func UpsertShare(id string, req UpsertShareRequest) (*Share, error) {
 	userIDsJSON, _ := json.Marshal(userIDs)
 	clientNetworksJSON, _ := json.Marshal(clientNetworks)
 
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	shareID := strings.TrimSpace(id)
 	if shareID == "" {
 		shareID = idgen.New()

@@ -67,7 +67,7 @@ func UpdateRuntime(id string, mountPath string, status Status, totalSize int64, 
 		totalSize,
 		freeSize,
 		extraConfig,
-		time.Now(),
+		time.Now().UTC(),
 		id,
 	)
 	return err
@@ -77,7 +77,7 @@ func UpdateIdentity(id string, username string) error {
 	_, err := database.DB.Exec(
 		`UPDATE storage SET username = ?, updated_at = ? WHERE id = ?`,
 		username,
-		time.Now(),
+		time.Now().UTC(),
 		id,
 	)
 	return err

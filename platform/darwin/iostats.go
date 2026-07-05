@@ -68,7 +68,7 @@ func (p Provider) Sample(ctx context.Context, storage storagepkg.Storage, interv
 		MountPath:   storage.MountPath,
 		ReadSpeed:   float64(readBytes) / seconds,
 		WriteSpeed:  float64(writeBytes) / seconds,
-		MeasuredAt:  time.Now(),
+		MeasuredAt:  time.Now().UTC(),
 		Note:        buildDarwinNote(storage),
 	}
 	return stats, nil
@@ -155,7 +155,7 @@ func sampleDarwinSMB(ctx context.Context, storage storagepkg.Storage, interval t
 		MountPath:   storage.MountPath,
 		ReadSpeed:   float64(readBytes) / seconds,
 		WriteSpeed:  float64(writeBytes) / seconds,
-		MeasuredAt:  time.Now(),
+		MeasuredAt:  time.Now().UTC(),
 		Note:        buildDarwinNote(storage),
 		Debug: smbDebugInfo{
 			Host:               host,
@@ -218,7 +218,7 @@ func sampleDarwinSMBByHost(ctx context.Context, storage storagepkg.Storage, host
 		MountPath:   storage.MountPath,
 		ReadSpeed:   float64(readBytes) / seconds,
 		WriteSpeed:  float64(writeBytes) / seconds,
-		MeasuredAt:  time.Now(),
+		MeasuredAt:  time.Now().UTC(),
 		Note:        "Sampled from macOS nettop by filtering TCP connections to the SMB host.",
 		Debug:       debug,
 	}, nil

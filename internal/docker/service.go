@@ -249,7 +249,7 @@ func normalizeTimestamp(value string) string {
 	if !ok {
 		return ""
 	}
-	return parsed.Format(time.RFC3339)
+	return parsed.UTC().Format(time.RFC3339)
 }
 
 func parsePercent(value string) float64 {

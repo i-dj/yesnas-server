@@ -71,7 +71,7 @@ func (h *Handler) HandleListContainersStream(w http.ResponseWriter, r *http.Requ
 		}
 		if !writeSSEEvent(w, flusher, "docker-containers", map[string]any{
 			"items":     items,
-			"checkedAt": time.Now().Format(time.RFC3339),
+			"checkedAt": time.Now().UTC().Format(time.RFC3339),
 		}) {
 			return
 		}

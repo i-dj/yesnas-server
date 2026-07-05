@@ -78,7 +78,7 @@ func ListCandidates(ctx context.Context) (pkgdisks.CandidateList, error) {
 
 	return pkgdisks.CandidateList{
 		Items:       items,
-		GeneratedAt: time.Now(),
+		GeneratedAt: time.Now().UTC(),
 	}, nil
 }
 

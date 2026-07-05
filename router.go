@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"nas-server/database"
@@ -34,6 +35,9 @@ func newRouter() http.Handler {
 	if err := database.EnsureStorageTokenSchema(); err != nil {
 		log.Fatalf("Ensure Storage Token Schema error: %v", err)
 	}
+	if err := database.EnsureOAuthBrokerSchema(); err != nil {
+		log.Fatalf("Ensure OAuth Broker Schema error: %v", err)
+	}
 	if err := database.EnsureStoragePoolSchema(); err != nil {
 		log.Fatalf("Ensure Storage Pool Schema error: %v", err)
 	}
@@ -54,6 +58,18 @@ func newRouter() http.Handler {
 	}
 	if err := database.EnsureFileShareSchema(); err != nil {
 		log.Fatalf("Ensure File Share Schema error: %v", err)
+	}
+	geoIPPath := strings.TrimSpace(os.Getenv("GEOLITE2_CITY_DB"))
+	if geoIPPath == "" {
+		geoIPPath = "data/GeoLite2-City.mmdb"
+	}
+	if err := auditmodule.InitGeoIP(geoIPPath); err != nil {
+		log.Printf("notice: GeoIP disabled: %v", err)
+	} else {
+		log.Printf("GeoIP database loaded: %s", geoIPPath)
+	}
+	if err := auditmodule.BackfillLegacyLogs(); err != nil {
+		log.Printf("notice: audit log backfill failed: %v", err)
 	}
 	if err := database.RunSeed("database/seed.sql"); err != nil {
 		log.Printf("notice: %v", err)
@@ -78,9 +94,10 @@ func newRouter() http.Handler {
 	mux.HandleFunc("GET /api/v1/logs", auditHandler.HandleList)
 	mux.HandleFunc("GET /api/v1/logs/heatmap", auditHandler.HandleHeatmap)
 	mux.HandleFunc("GET /api/v1/storages", systemHandler.HandleStorageList)
-	mux.HandleFunc("GET /api/v1/storages/google-drive/connect", systemHandler.HandleStartGoogleDriveConnectRedirect)
-	mux.HandleFunc("POST /api/v1/storages/google-drive/connect", systemHandler.HandleStartGoogleDriveConnect)
-	mux.HandleFunc("GET /api/v1/storages/google-drive/callback", systemHandler.HandleGoogleDriveCallback)
+	mux.HandleFunc("GET /api/v1/storages/{provider}/connect", systemHandler.HandleStartCloudConnectRedirect)
+	mux.HandleFunc("POST /api/v1/storages/{provider}/connect", systemHandler.HandleStartCloudConnect)
+	mux.HandleFunc("GET /api/v1/storages/{provider}/oauth-status/{sessionId}", systemHandler.HandleCloudOAuthStatus)
+	mux.HandleFunc("POST /api/v1/storages/{provider}/complete", systemHandler.HandleCompleteCloudConnect)
 	mux.HandleFunc("GET /api/v1/system/disks", systemHandler.HandleSystemDisks)
 	mux.HandleFunc("GET /api/v1/system/status", systemHandler.HandleSystemStatus)
 	mux.HandleFunc("GET /api/v1/system/status/stream", systemHandler.HandleSystemStatusStream)
@@ -91,6 +108,7 @@ func newRouter() http.Handler {
 	mux.HandleFunc("GET /api/v1/system/raid/candidates", systemHandler.HandleRaidCandidates)
 	mux.HandleFunc("GET /api/v1/system/storage-pools", storagePoolHandler.HandleListPools)
 	mux.HandleFunc("POST /api/v1/system/storage-pools", storagePoolHandler.HandleCreatePool)
+	mux.HandleFunc("PUT /api/v1/system/storage-pools/{poolId}", storagePoolHandler.HandleUpdatePool)
 	mux.HandleFunc("DELETE /api/v1/system/storage-pools/{poolId}", storagePoolHandler.HandleDeletePool)
 	mux.HandleFunc("POST /api/v1/system/storage-pools/{poolId}/format", storagePoolHandler.HandleFormatPool)
 	mux.HandleFunc("POST /api/v1/system/storage-pools/{poolId}/devices/replace", storagePoolHandler.HandleReplaceDevice)
@@ -107,9 +125,12 @@ func newRouter() http.Handler {
 	mux.HandleFunc("GET /api/v1/files/trash", filesHandler.HandleGlobalTrashList)
 	mux.HandleFunc("GET /api/v1/storages/{storage}/files/{fileId}/thumbnail", filesHandler.HandleThumbnail)
 	mux.HandleFunc("GET /api/v1/storages/{storage}/files/{fileId}/content", filesHandler.HandleContent)
+	mux.HandleFunc("PATCH /api/v1/storages/{storage}/files/{fileId}", filesHandler.HandleRename)
+	mux.HandleFunc("POST /api/v1/storages/{storage}/files/{fileId}/conflicts", filesHandler.HandleConflictCheck)
+	mux.HandleFunc("POST /api/v1/storages/{storage}/files/{fileId}/move", filesHandler.HandleMove)
+	mux.HandleFunc("POST /api/v1/storages/{storage}/files/{fileId}/copy", filesHandler.HandleCopy)
 	mux.HandleFunc("DELETE /api/v1/storages/{storage}/files/{fileId}", filesHandler.HandleDelete)
 	mux.HandleFunc("POST /api/v1/storages/{storage}/folders", filesHandler.HandleCreateFolder)
-	mux.HandleFunc("POST /api/v1/folders", filesHandler.HandleCreateFolder)
 	mux.HandleFunc("POST /api/v1/uploads/tus", filesHandler.HandleTusCreate)
 	mux.HandleFunc("HEAD /api/v1/uploads/tus/{uploadId}", filesHandler.HandleTusHead)
 	mux.HandleFunc("PATCH /api/v1/uploads/tus/{uploadId}", filesHandler.HandleTusPatch)

@@ -131,7 +131,7 @@ func ReplaceDevice(ctx context.Context, pool *StoragePool, req ReplaceDeviceRequ
 	if err := UpdateDevice(oldRecord); err != nil {
 		return nil, fmt.Errorf("update storage pool device record: %w", err)
 	}
-	if err := ResetBenchmarkResult(pool.ID, time.Now()); err != nil {
+	if err := ResetBenchmarkResult(pool.ID, time.Now().UTC()); err != nil {
 		return nil, fmt.Errorf("reset benchmark result: %w", err)
 	}
 

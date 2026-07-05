@@ -87,7 +87,7 @@ func Create(req CreateRequest) (*User, string, error) {
 	if status != string(StatusActive) && status != string(StatusDisabled) {
 		return nil, "", fmt.Errorf("invalid user status")
 	}
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	item := &User{
 		ID:           idgen.New(),
 		Username:     username,
@@ -141,7 +141,7 @@ func Update(id string, req UpdateRequest) (*User, string, error) {
 		}
 		plainPassword = req.Password
 	}
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = database.DB.Exec(
 		`UPDATE users SET display_name = ?, is_admin = ?, avatar = ?, password_hash = ?, status = ?, updated_at = ? WHERE id = ?`,
 		displayName, isAdmin, avatar, passwordHash, status, now, item.ID,

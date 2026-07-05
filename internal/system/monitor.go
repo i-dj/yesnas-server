@@ -59,7 +59,7 @@ func CollectSystemStatus(ctx context.Context, sampleInterval time.Duration) (Sys
 		CPU:         collectCPUStatus(cpuBefore, cpuAfter),
 		Memory:      collectMemoryStatus(),
 		GPU:         collectGPUStatus(ctx),
-		CheckedAt:   time.Now().Format(time.RFC3339),
+		CheckedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
 	return status, nil
 }
