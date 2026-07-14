@@ -60,9 +60,6 @@ jobs:
       matrix:
         goarch: [amd64, arm64]
     env:
-      CGO_ENABLED: "0"
-      GOOS: linux
-      GOARCH: ${{ matrix.goarch }}
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - name: Checkout
@@ -80,6 +77,10 @@ jobs:
 
       - name: Build binary
         shell: bash
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -87,6 +88,8 @@ jobs:
 
       - name: Package release archive
         shell: bash
+        env:
+          GOARCH: ${{ matrix.goarch }}
         run: |
           set -euo pipefail
 
