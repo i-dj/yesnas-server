@@ -8,6 +8,7 @@ CONFIG_DIR="${YESNAS_CONFIG_DIR:-/etc/yesnas}"
 DATA_ROOT="${YESNAS_DATA_ROOT:-/srv/yesnas}"
 SERVICE_NAME="${YESNAS_SERVICE_NAME:-yesnas}"
 DEFAULT_PORT="${YESNAS_PORT:-8080}"
+OAUTH_BROKER_REGISTRATION_SECRET="${OAUTH_BROKER_REGISTRATION_SECRET:-${DEVICE_REGISTRATION_SECRET:-affc5ba6555a784cf0accf2ba8788e3cae4699a15b167ad4d4bb2fd892516bed}}"
 
 STEP=0
 TOTAL_STEPS=13
@@ -63,7 +64,11 @@ prompt_value() {
   local prompt="$1"
   local default="$2"
   local value=""
-  read -r -p "${prompt} [${default}]: " value || true
+  if [[ -r /dev/tty ]]; then
+    read -r -p "${prompt} [${default}]: " value </dev/tty || true
+  else
+    warn "No interactive terminal detected; using default for ${prompt}: ${default}"
+  fi
   if [[ -z "${value// }" ]]; then
     echo "${default}"
   else
@@ -271,6 +276,7 @@ YESNAS_UPLOAD_METADIR=${INSTALL_DIR}/data/uploads
 YESNAS_CLOUD_UPLOAD_TMPDIR=${DATA_ROOT}/cache/uploads
 OAUTH_BROKER_BASE_URL=https://oauth.yesnas.com
 OAUTH_BROKER_DEVICE_NAME=${host_name}
+OAUTH_BROKER_REGISTRATION_SECRET=${OAUTH_BROKER_REGISTRATION_SECRET}
 EOF
   run_root chmod 0640 "${CONFIG_DIR}/yesnas.env"
   run_root chown "root:${install_group}" "${CONFIG_DIR}/yesnas.env"
