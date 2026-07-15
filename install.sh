@@ -238,7 +238,12 @@ EOF
   log "Asset: ${asset}"
   curl -fL --retry 3 --retry-delay 2 -o "${archive}" "$(release_url "${asset}")"
   if curl -fL --retry 3 --retry-delay 2 -o "${archive}.sha256" "$(release_url "${asset_sha}")"; then
-    (cd "${tmp_dir}" && sha256sum -c "${asset_sha}")
+    local expected_sha
+    expected_sha="$(awk '{print $1}' "${archive}.sha256" | head -n 1)"
+    if [[ -z "${expected_sha}" ]]; then
+      fail "Downloaded SHA256 file is empty."
+    fi
+    printf '%s  %s\n' "${expected_sha}" "${archive}" | sha256sum -c -
   else
     warn "SHA256 file not found; skipping checksum verification."
   fi
