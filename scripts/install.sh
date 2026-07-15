@@ -266,6 +266,13 @@ EOF
   if [[ -f "${extracted_dir}/README.md" ]]; then
     run_root install -m 0644 -o "${install_user}" -g "${install_group}" "${extracted_dir}/README.md" "${INSTALL_DIR}/README.md"
   fi
+  if [[ -d "${extracted_dir}/database" ]]; then
+    run_root mkdir -p "${INSTALL_DIR}/database"
+    for sql_file in "${extracted_dir}"/database/*.sql; do
+      [[ -f "${sql_file}" ]] || continue
+      run_root install -m 0644 -o "${install_user}" -g "${install_group}" "${sql_file}" "${INSTALL_DIR}/database/$(basename "${sql_file}")"
+    done
+  fi
   rm -rf "${tmp_dir}"
 
   step "Create YesNAS environment config"

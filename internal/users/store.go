@@ -210,6 +210,28 @@ func CountAdmins() (int, error) {
 	return count, err
 }
 
+func EnsureDefaultAdmin() (bool, error) {
+	var count int
+	if err := database.DB.Get(&count, `SELECT COUNT(1) FROM users`); err != nil {
+		return false, fmt.Errorf("count users: %w", err)
+	}
+	if count > 0 {
+		return false, nil
+	}
+	passwordHash, err := hashPassword("admin")
+	if err != nil {
+		return false, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := database.DB.Exec(
+		`INSERT INTO users (id, username, display_name, is_admin, avatar, password_hash, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		idgen.New(), "admin", "Administrator", true, "", passwordHash, string(StatusActive), now, now,
+	); err != nil {
+		return false, fmt.Errorf("create default admin user: %w", err)
+	}
+	return true, nil
+}
+
 const userSelectSQL = `SELECT id, username, COALESCE(display_name, '') AS display_name, COALESCE(is_admin, 0) AS is_admin, COALESCE(avatar, '') AS avatar, password_hash, status, created_at, updated_at FROM users`
 
 func normalizeUsername(value string) string {

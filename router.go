@@ -50,6 +50,11 @@ func newRouter() http.Handler {
 	if err := database.EnsureUsersSchema(); err != nil {
 		log.Fatalf("Ensure Users Schema error: %v", err)
 	}
+	if created, err := usersmodule.EnsureDefaultAdmin(); err != nil {
+		log.Fatalf("Ensure Default Admin error: %v", err)
+	} else if created {
+		log.Println("default admin user created: username=admin password=admin")
+	}
 	if err := database.EnsureUserSessionSchema(); err != nil {
 		log.Fatalf("Ensure User Session Schema error: %v", err)
 	}
