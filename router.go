@@ -144,6 +144,8 @@ func newRouter() http.Handler {
 	mux.HandleFunc("POST /api/v1/jobs/{jobId}/cancel", jobsHandler.HandleCancel)
 	mux.HandleFunc("GET /api/v1/docker/containers", dockerHandler.HandleListContainers)
 	mux.HandleFunc("GET /api/v1/docker/containers/stream", dockerHandler.HandleListContainersStream)
+	mux.HandleFunc("PUT /api/v1/users/me/profile", usersHandler.HandleUpdateMyProfile)
+	mux.HandleFunc("PUT /api/v1/users/me/password", usersHandler.HandleUpdateMyPassword)
 	mux.HandleFunc("GET /api/v1/users", usersHandler.HandleList)
 	mux.HandleFunc("POST /api/v1/users", usersHandler.HandleCreate)
 	mux.HandleFunc("PUT /api/v1/users/{userId}", usersHandler.HandleUpdate)

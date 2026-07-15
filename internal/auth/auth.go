@@ -79,14 +79,34 @@ func NewHandler() *Handler {
 
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := ExtractToken(r)
-		if token != "" {
-			if actor, _, err := LookupSession(token); err == nil && actor != nil {
-				r = r.WithContext(identity.WithActor(r.Context(), *actor))
-			}
+		if isPublicRequest(r) {
+			next.ServeHTTP(w, r)
+			return
 		}
+		token := ExtractToken(r)
+		if token == "" {
+			writeAPIError(w, http.StatusUnauthorized, "AUTH_REQUIRED", "Authentication is required")
+			return
+		}
+		actor, _, err := LookupSession(token)
+		if err != nil || actor == nil {
+			writeAPIError(w, http.StatusUnauthorized, "AUTH_INVALID", "Invalid or expired session")
+			return
+		}
+		r = r.WithContext(identity.WithActor(r.Context(), *actor))
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isPublicRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.Method == http.MethodOptions {
+		return true
+	}
+	path := strings.TrimSpace(r.URL.Path)
+	return r.Method == http.MethodPost && path == "/api/v1/auth/login"
 }
 
 func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {

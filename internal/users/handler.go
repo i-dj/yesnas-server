@@ -3,8 +3,10 @@ package users
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"nas-server/internal/audit"
+	"nas-server/internal/identity"
 	"nas-server/pkg/httpx"
 )
 
@@ -70,6 +72,50 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		"status":      item.Status,
 	})
 	writeJSON(w, item)
+}
+
+func (h *Handler) HandleUpdateMyProfile(w http.ResponseWriter, r *http.Request) {
+	actor := identity.ActorFromContext(r.Context())
+	if actor == nil || strings.TrimSpace(actor.UserID) == "" {
+		writeAPIError(w, http.StatusUnauthorized, "AUTH_REQUIRED", "Authentication is required")
+		return
+	}
+	var req UpdateMyProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid request body")
+		return
+	}
+	item, err := UpdateMyProfile(actor.UserID, req)
+	if err != nil {
+		audit.UserAction(r.Context(), "profile_update_failed", "update", false, "user", actor.UserID, actor.Username, err.Error(), nil)
+		writeAPIError(w, http.StatusBadRequest, "PROFILE_UPDATE_FAILED", err.Error())
+		return
+	}
+	audit.UserAction(r.Context(), "profile_updated", "update", true, "user", item.ID, item.Username, "Profile updated", map[string]any{
+		"displayName": item.DisplayName,
+		"avatar":      item.Avatar,
+	})
+	writeJSON(w, item)
+}
+
+func (h *Handler) HandleUpdateMyPassword(w http.ResponseWriter, r *http.Request) {
+	actor := identity.ActorFromContext(r.Context())
+	if actor == nil || strings.TrimSpace(actor.UserID) == "" {
+		writeAPIError(w, http.StatusUnauthorized, "AUTH_REQUIRED", "Authentication is required")
+		return
+	}
+	var req UpdateMyPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid request body")
+		return
+	}
+	if err := UpdateMyPassword(actor.UserID, req); err != nil {
+		audit.UserAction(r.Context(), "password_update_failed", "update", false, "user", actor.UserID, actor.Username, err.Error(), nil)
+		writeAPIError(w, http.StatusBadRequest, "PASSWORD_UPDATE_FAILED", err.Error())
+		return
+	}
+	audit.UserAction(r.Context(), "password_updated", "update", true, "user", actor.UserID, actor.Username, "Password updated", nil)
+	writeJSON(w, map[string]any{"updated": true})
 }
 
 func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {

@@ -35,3 +35,13 @@ type UpdateRequest struct {
 	Password    string  `json:"password,omitempty"`
 	Status      *string `json:"status,omitempty"`
 }
+
+type UpdateMyProfileRequest struct {
+	DisplayName *string `json:"displayName,omitempty"`
+	Avatar      *string `json:"avatar,omitempty"`
+}
+
+type UpdateMyPasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}

@@ -6,3 +6,4 @@ data/*.db-wal
 data/*.db-shm
 data/*.mmdb
 oauth/rclone.conf
+.gocache

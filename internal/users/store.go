@@ -153,6 +153,52 @@ func Update(id string, req UpdateRequest) (*User, string, error) {
 	return updated, plainPassword, err
 }
 
+func UpdateMyProfile(userID string, req UpdateMyProfileRequest) (*User, error) {
+	item, err := Get(userID)
+	if err != nil {
+		return nil, err
+	}
+	displayName := item.DisplayName
+	if req.DisplayName != nil {
+		displayName = strings.TrimSpace(*req.DisplayName)
+	}
+	avatar := item.Avatar
+	if req.Avatar != nil {
+		avatar = normalizeAvatar(*req.Avatar)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := database.DB.Exec(
+		`UPDATE users SET display_name = ?, avatar = ?, updated_at = ? WHERE id = ?`,
+		displayName, avatar, now, item.ID,
+	); err != nil {
+		return nil, fmt.Errorf("update profile: %w", err)
+	}
+	return Get(item.ID)
+}
+
+func UpdateMyPassword(userID string, req UpdateMyPasswordRequest) error {
+	item, err := Get(userID)
+	if err != nil {
+		return err
+	}
+	if !verifyPassword(req.CurrentPassword, item.PasswordHash) {
+		return fmt.Errorf("current password is incorrect")
+	}
+	passwordHash, err := hashPassword(req.NewPassword)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = database.DB.Exec(
+		`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`,
+		passwordHash, now, item.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	return nil
+}
+
 func Delete(id string) error {
 	_, err := database.DB.Exec(`DELETE FROM users WHERE id = ?`, strings.TrimSpace(id))
 	return err
