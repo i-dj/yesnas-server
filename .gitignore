@@ -5,5 +5,6 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 data/*.mmdb
+!data/GeoLite2-City.mmdb
 oauth/rclone.conf
 .gocache

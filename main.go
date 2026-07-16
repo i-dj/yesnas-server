@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	addr := getEnv("ADDR", ":8080")
+	addr := getEnv("ADDR", ":28080")
 	fmt.Printf("Server running at http://localhost%s\n", addr)
 	server := &http.Server{
 		Addr:              addr,

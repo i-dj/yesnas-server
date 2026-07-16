@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-INSTALL_DIR="${YESNAS_INSTALL_DIR:-/opt/yesnas}"
-CONFIG_DIR="${YESNAS_CONFIG_DIR:-/etc/yesnas}"
+INSTALL_DIR="${YESNAS_INSTALL_DIR:-/opt/yesnas/server}"
+CONFIG_DIR="${YESNAS_CONFIG_DIR:-/etc/yesnas-server}"
 DATA_ROOT="${YESNAS_DATA_ROOT:-/srv/yesnas}"
-SERVICE_NAME="${YESNAS_SERVICE_NAME:-yesnas}"
+SERVICE_NAME="${YESNAS_SERVICE_NAME:-yesnas-server}"
 
 STEP=0
 TOTAL_STEPS=9

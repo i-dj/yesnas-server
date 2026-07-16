@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 REPO="${YESNAS_REPO:-i-dj/yesnas-server}"
 VERSION="${YESNAS_VERSION:-latest}"
-INSTALL_DIR="${YESNAS_INSTALL_DIR:-/opt/yesnas}"
-SERVICE_NAME="${YESNAS_SERVICE_NAME:-yesnas}"
+INSTALL_DIR="${YESNAS_INSTALL_DIR:-/opt/yesnas/server}"
+SERVICE_NAME="${YESNAS_SERVICE_NAME:-yesnas-server}"
 
 STEP=0
 TOTAL_STEPS=7
@@ -149,6 +149,12 @@ main() {
       run_root install -m 0644 -o "${install_user}" -g "${install_group}" "${sql_file}" "${INSTALL_DIR}/database/$(basename "${sql_file}")"
     done
   fi
+  if [[ ! -f "${extracted_dir}/data/GeoLite2-City.mmdb" ]]; then
+    fail "Release archive does not contain data/GeoLite2-City.mmdb."
+  fi
+  run_root mkdir -p "${INSTALL_DIR}/data"
+  run_root install -m 0644 -o "${install_user}" -g "${install_group}" \
+    "${extracted_dir}/data/GeoLite2-City.mmdb" "${INSTALL_DIR}/data/GeoLite2-City.mmdb"
   rm -rf "${tmp_dir}"
 
   step "Restart YesNAS service"

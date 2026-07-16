@@ -3,11 +3,11 @@ set -Eeuo pipefail
 
 REPO="${YESNAS_REPO:-i-dj/yesnas-server}"
 VERSION="${YESNAS_VERSION:-latest}"
-INSTALL_DIR="${YESNAS_INSTALL_DIR:-/opt/yesnas}"
-CONFIG_DIR="${YESNAS_CONFIG_DIR:-/etc/yesnas}"
+INSTALL_DIR="${YESNAS_INSTALL_DIR:-/opt/yesnas/server}"
+CONFIG_DIR="${YESNAS_CONFIG_DIR:-/etc/yesnas-server}"
 DATA_ROOT="${YESNAS_DATA_ROOT:-/srv/yesnas}"
-SERVICE_NAME="${YESNAS_SERVICE_NAME:-yesnas}"
-DEFAULT_PORT="${YESNAS_PORT:-8080}"
+SERVICE_NAME="${YESNAS_SERVICE_NAME:-yesnas-server}"
+DEFAULT_PORT="${YESNAS_PORT:-28080}"
 OAUTH_BROKER_REGISTRATION_SECRET="${OAUTH_BROKER_REGISTRATION_SECRET:-${DEVICE_REGISTRATION_SECRET:-affc5ba6555a784cf0accf2ba8788e3cae4699a15b167ad4d4bb2fd892516bed}}"
 
 STEP=0
@@ -101,13 +101,12 @@ main() {
   fi
 
   local detected_user="${SUDO_USER:-$(id -un)}"
-  if [[ "${detected_user}" == "root" ]]; then
-    detected_user="dj"
-  fi
+  local detected_hostname
+  detected_hostname="$(hostname 2>/dev/null || echo YesNAS)"
   local install_user
   local host_name
-  install_user="$(prompt_value "Enter the Linux user that will run YesNAS" "${YESNAS_USER:-${detected_user}}")"
-  host_name="$(prompt_value "Enter hostname" "${YESNAS_HOSTNAME:-YesNAS}")"
+  install_user="$(prompt_value "请输入运行 YesNAS 的 Linux 用户（直接回车使用当前用户）" "${YESNAS_USER:-${detected_user}}")"
+  host_name="$(prompt_value "请输入设备名称，也就是这台 NAS 的主机名（直接回车保留当前名称）" "${YESNAS_HOSTNAME:-${detected_hostname}}")"
 
   if ! id "${install_user}" >/dev/null 2>&1; then
     fail "User '${install_user}' does not exist. Please create it first, or rerun with YESNAS_USER=<existing-user>."
@@ -273,6 +272,11 @@ EOF
       run_root install -m 0644 -o "${install_user}" -g "${install_group}" "${sql_file}" "${INSTALL_DIR}/database/$(basename "${sql_file}")"
     done
   fi
+  if [[ ! -f "${extracted_dir}/data/GeoLite2-City.mmdb" ]]; then
+    fail "Release archive does not contain data/GeoLite2-City.mmdb."
+  fi
+  run_root install -m 0644 -o "${install_user}" -g "${install_group}" \
+    "${extracted_dir}/data/GeoLite2-City.mmdb" "${INSTALL_DIR}/data/GeoLite2-City.mmdb"
   rm -rf "${tmp_dir}"
 
   step "Create YesNAS environment config"

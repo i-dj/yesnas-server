@@ -22,7 +22,7 @@ import (
 type Router struct{}
 
 func newRouter() http.Handler {
-	if err := database.InitDB("data/nas1.db"); err != nil {
+	if err := database.InitDB("data/nas.db"); err != nil {
 		log.Fatalf("Init DB error: %v", err)
 	}
 	database.DB.Exec("PRAGMA foreign_keys = ON;")
