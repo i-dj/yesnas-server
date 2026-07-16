@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 REPO="${YESNAS_REPO:-i-dj/yesnas-server}"
 VERSION="${YESNAS_VERSION:-latest}"
+PROGRAM_NAME="YesNAS Server"
 INSTALL_DIR="${YESNAS_INSTALL_DIR:-/opt/yesnas/server}"
 CONFIG_DIR="${YESNAS_CONFIG_DIR:-/etc/yesnas-server}"
 DATA_ROOT="${YESNAS_DATA_ROOT:-/srv/yesnas}"
@@ -60,6 +61,22 @@ release_url() {
   fi
 }
 
+resolve_version() {
+  if [[ "${VERSION}" != "latest" ]]; then
+    return
+  fi
+
+  local latest_url
+  local resolved_version
+  latest_url="$(curl -fsSLI --retry 3 --retry-delay 2 -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest")" \
+    || fail "Failed to resolve the latest ${PROGRAM_NAME} version."
+  resolved_version="${latest_url##*/}"
+  if [[ -z "${resolved_version}" || "${resolved_version}" == "latest" ]]; then
+    fail "GitHub returned an invalid latest release URL: ${latest_url}"
+  fi
+  VERSION="${resolved_version}"
+}
+
 prompt_value() {
   local prompt="$1"
   local default="$2"
@@ -87,6 +104,8 @@ append_once() {
 
 main() {
   step "Check system environment"
+  log "Program: ${PROGRAM_NAME}"
+  log "Requested version: ${VERSION}"
   require_command uname
   require_command grep
   require_command tar
@@ -105,8 +124,8 @@ main() {
   detected_hostname="$(hostname 2>/dev/null || echo YesNAS)"
   local install_user
   local host_name
-  install_user="$(prompt_value "请输入运行 YesNAS 的 Linux 用户（直接回车使用当前用户）" "${YESNAS_USER:-${detected_user}}")"
-  host_name="$(prompt_value "请输入设备名称，也就是这台 NAS 的主机名（直接回车保留当前名称）" "${YESNAS_HOSTNAME:-${detected_hostname}}")"
+  install_user="$(prompt_value "Linux user for running YesNAS (press Enter to use the current user)" "${YESNAS_USER:-${detected_user}}")"
+  host_name="$(prompt_value "Device name / hostname (press Enter to keep the current hostname)" "${YESNAS_HOSTNAME:-${detected_hostname}}")"
 
   if ! id "${install_user}" >/dev/null 2>&1; then
     fail "User '${install_user}' does not exist. Please create it first, or rerun with YESNAS_USER=<existing-user>."
@@ -232,11 +251,13 @@ EOF
   local asset_sha
   local tmp_dir
   local archive
+  resolve_version
   arch="$(detect_arch)"
   asset="yesnas-server-linux-${arch}.tar.gz"
   asset_sha="${asset}.sha256"
   tmp_dir="$(mktemp -d)"
   archive="${tmp_dir}/${asset}"
+  log "Program: ${PROGRAM_NAME}"
   log "Repository: ${REPO}"
   log "Version: ${VERSION}"
   log "Asset: ${asset}"
@@ -327,6 +348,8 @@ EOF
   step "Installation completed"
   local ip_addr
   ip_addr="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  log "Program: ${PROGRAM_NAME}"
+  log "Version: ${VERSION}"
   log "YesNAS service: ${SERVICE_NAME}"
   log "Install dir: ${INSTALL_DIR}"
   log "Config file: ${CONFIG_DIR}/yesnas.env"
