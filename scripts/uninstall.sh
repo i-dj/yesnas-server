@@ -85,8 +85,12 @@ main() {
     require_command sudo
     sudo -v
   fi
-  if ! confirm "This will uninstall YesNAS and remove its program/config/data files. Type YESNAS to continue:" "YESNAS"; then
-    fail "Uninstall cancelled."
+  if [[ "${YESNAS_NONINTERACTIVE:-0}" != "1" ]]; then
+    if ! confirm "This will uninstall YesNAS and remove its program/config/data files. Type YESNAS to continue:" "YESNAS"; then
+      fail "Uninstall cancelled."
+    fi
+  else
+    log "Non-interactive uninstall enabled."
   fi
 
   step "Stop and disable YesNAS service"
@@ -120,7 +124,11 @@ main() {
 
   step "Remove YesNAS data directory"
   warn "Data root will be removed: ${DATA_ROOT}"
-  if confirm "Type DELETE-DATA to remove ${DATA_ROOT}:" "DELETE-DATA"; then
+  if [[ "${YESNAS_NONINTERACTIVE:-0}" == "1" && "${YESNAS_REMOVE_DATA:-0}" == "1" ]]; then
+    run_root rm -rf "${DATA_ROOT}"
+  elif [[ "${YESNAS_NONINTERACTIVE:-0}" == "1" ]]; then
+    warn "Skipped data directory removal: ${DATA_ROOT}"
+  elif confirm "Type DELETE-DATA to remove ${DATA_ROOT}:" "DELETE-DATA"; then
     run_root rm -rf "${DATA_ROOT}"
   else
     warn "Skipped data directory removal: ${DATA_ROOT}"
@@ -128,7 +136,17 @@ main() {
 
   step "Optionally uninstall system dependencies"
   warn "This can remove SMB / FTP / WebDAV / NFS / rclone packages that may be used by other services."
-  if confirm "Type REMOVE-DEPS to purge YesNAS dependency packages:" "REMOVE-DEPS"; then
+  if [[ "${YESNAS_NONINTERACTIVE:-0}" == "1" && "${YESNAS_REMOVE_DEPS:-0}" == "1" ]]; then
+    if command -v apt-get >/dev/null 2>&1; then
+      export DEBIAN_FRONTEND=noninteractive
+      run_root apt-get purge -y "${DEPENDENCY_PACKAGES[@]}" || true
+      run_root apt-get autoremove -y || true
+    else
+      warn "apt-get not found; skipping dependency removal."
+    fi
+  elif [[ "${YESNAS_NONINTERACTIVE:-0}" == "1" ]]; then
+    warn "Skipped dependency package removal."
+  elif confirm "Type REMOVE-DEPS to purge YesNAS dependency packages:" "REMOVE-DEPS"; then
     if command -v apt-get >/dev/null 2>&1; then
       export DEBIAN_FRONTEND=noninteractive
       run_root apt-get purge -y "${DEPENDENCY_PACKAGES[@]}" || true

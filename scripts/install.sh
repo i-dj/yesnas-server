@@ -81,16 +81,16 @@ prompt_value() {
   local prompt="$1"
   local default="$2"
   local value=""
+  if [[ "${YESNAS_NONINTERACTIVE:-0}" == "1" ]]; then
+    printf '%s\n' "${default}"
+    return
+  fi
   if [[ -r /dev/tty ]]; then
     read -r -p "${prompt} [${default}]: " value </dev/tty || true
   else
     warn "No interactive terminal detected; using default for ${prompt}: ${default}"
   fi
-  if [[ -z "${value// }" ]]; then
-    echo "${default}"
-  else
-    echo "${value}"
-  fi
+  printf '%s\n' "${value:-${default}}"
 }
 
 append_once() {
