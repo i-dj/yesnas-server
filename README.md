@@ -38,6 +38,26 @@ The installer asks for two values:
 - **Service user:** the Linux user that runs the YesNAS backend. Press Enter to use the user who started the installer.
 - **Device name (hostname):** the name used to identify this NAS on the system and local network. Press Enter to keep the current hostname.
 
+### Non-interactive installation
+
+Parent installers and automated deployments can disable all YesNAS Server prompts without detaching the terminal or using `setsid`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/i-dj/yesnas-server/main/scripts/install.sh \
+  | bash -s -- --non-interactive --user "$(id -un)" --hostname "$(hostname)"
+```
+
+The equivalent environment-variable form is:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/i-dj/yesnas-server/main/scripts/install.sh \
+  | YESNAS_NONINTERACTIVE=1 YESNAS_USER="$(id -un)" YESNAS_HOSTNAME="$(hostname)" bash
+```
+
+Environment variables must be applied to `bash`, on the right side of the pipe. Applying them only to `curl` does not pass them to the installer.
+
+Non-interactive mode never opens `/dev/tty` and uses non-interactive `sudo`. Run the parent installer as root, or ensure it already has a valid passwordless/cached sudo credential.
+
 After installation, the service listens on port `28080` by default:
 
 ```text

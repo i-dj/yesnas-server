@@ -35,6 +35,8 @@ step() {
 run_root() {
   if [[ "${EUID}" -eq 0 ]]; then
     "$@"
+  elif [[ "${YESNAS_NONINTERACTIVE:-0}" == "1" ]]; then
+    sudo -n "$@"
   else
     sudo "$@"
   fi
@@ -42,6 +44,49 @@ run_root() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing command: $1"
+}
+
+usage() {
+  cat <<'EOF'
+Usage: install.sh [options]
+
+Options:
+  --non-interactive     Disable all installer prompts and use supplied or default values
+  --user USER           Linux user that will run YesNAS Server
+  --hostname NAME       Device hostname to configure
+  -h, --help            Show this help message
+
+The same values can be provided with YESNAS_NONINTERACTIVE=1,
+YESNAS_USER, and YESNAS_HOSTNAME environment variables.
+EOF
+}
+
+parse_args() {
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --non-interactive)
+        YESNAS_NONINTERACTIVE=1
+        ;;
+      --user)
+        [[ "$#" -ge 2 && -n "${2:-}" ]] || fail "--user requires a value."
+        YESNAS_USER="$2"
+        shift
+        ;;
+      --hostname)
+        [[ "$#" -ge 2 && -n "${2:-}" ]] || fail "--hostname requires a value."
+        YESNAS_HOSTNAME="$2"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        fail "Unknown option: $1. Run with --help for usage."
+        ;;
+    esac
+    shift
+  done
 }
 
 detect_arch() {
@@ -103,6 +148,7 @@ append_once() {
 }
 
 main() {
+  parse_args "$@"
   step "Check system environment"
   log "Program: ${PROGRAM_NAME}"
   log "Requested version: ${VERSION}"
@@ -116,7 +162,11 @@ main() {
   fi
   if [[ "${EUID}" -ne 0 ]]; then
     require_command sudo
-    sudo -v
+    if [[ "${YESNAS_NONINTERACTIVE:-0}" == "1" ]]; then
+      sudo -n -v || fail "Non-interactive installation requires root or an existing passwordless/cached sudo credential."
+    else
+      sudo -v
+    fi
   fi
 
   local detected_user="${SUDO_USER:-$(id -un)}"
