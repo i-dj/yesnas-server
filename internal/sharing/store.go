@@ -104,7 +104,7 @@ func ProtocolSummaries(host string) ([]ProtocolSummary, error) {
 	items := []ProtocolSummary{
 		{Protocol: ProtocolSMB, ShareURL: "smb://" + host + ":445"},
 		{Protocol: ProtocolFTP, ShareURL: "ftp://" + host + ":21"},
-		{Protocol: ProtocolWebDAV, ShareURL: "http://" + host + ":8088"},
+		{Protocol: ProtocolWebDAV, ShareURL: "http://" + host + ":28088"},
 		{Protocol: ProtocolNFS, ShareURL: host + ":/"},
 	}
 	for i := range items {

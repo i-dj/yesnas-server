@@ -78,6 +78,28 @@ remove_line_once() {
   fi
 }
 
+restore_apache_default_port() {
+  local marker="${CONFIG_DIR}/apache-default-port.changed"
+  [[ -f "${marker}" ]] || return
+
+  local apache_port
+  apache_port="$(tr -d '[:space:]' <"${marker}")"
+  if [[ -z "${apache_port}" ]]; then
+    warn "Apache port marker is empty; skipping default-port restoration."
+    return
+  fi
+
+  local ports_file="/etc/apache2/ports.conf"
+  local default_site="/etc/apache2/sites-available/000-default.conf"
+  if [[ -f "${ports_file}" ]]; then
+    run_root sed -i -E "s/^[[:space:]]*Listen[[:space:]]+${apache_port}[[:space:]]*$/Listen 80/" "${ports_file}"
+  fi
+  if [[ -f "${default_site}" ]]; then
+    run_root sed -i "s/<VirtualHost \*:${apache_port}>/<VirtualHost *:80>/g" "${default_site}"
+  fi
+  log "Restored Apache default HTTP port from ${apache_port} to 80."
+}
+
 main() {
   step "Check system environment"
   require_command sed
@@ -99,10 +121,11 @@ main() {
     run_root systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
   fi
 
-  step "Remove systemd service"
+  step "Remove systemd service and restore Apache default port"
   run_root rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
   run_root systemctl daemon-reload
   run_root systemctl reset-failed >/dev/null 2>&1 || true
+  restore_apache_default_port
 
   step "Remove YesNAS sudoers allowlist"
   run_root rm -f /etc/sudoers.d/yesnas
@@ -113,7 +136,7 @@ main() {
   run_root rm -f /etc/exports.d/yesnas.exports
   run_root rm -f /etc/proftpd/conf.d/yesnas.conf
   run_root rm -f /etc/apache2/sites-available/yesnas-webdav.conf
-  remove_line_once /etc/apache2/ports.conf "Listen 8088"
+  remove_line_once /etc/apache2/ports.conf "Listen 28088"
   if command -v a2dismod >/dev/null 2>&1; then
     run_root a2dismod dav dav_fs auth_basic authn_file headers >/dev/null 2>&1 || true
   fi

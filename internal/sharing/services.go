@@ -19,7 +19,7 @@ type protocolServiceSpec struct {
 var protocolServiceSpecs = []protocolServiceSpec{
 	{Protocol: ProtocolSMB, ServiceName: "smbd", Port: 445, URL: func(host string) string { return "smb://" + host + ":445" }},
 	{Protocol: ProtocolFTP, ServiceName: "proftpd", Port: 21, URL: func(host string) string { return "ftp://" + host + ":21" }},
-	{Protocol: ProtocolWebDAV, ServiceName: "apache2", Port: 8088, URL: func(host string) string { return "http://" + host + ":8088" }},
+	{Protocol: ProtocolWebDAV, ServiceName: "apache2", Port: 28088, URL: func(host string) string { return "http://" + host + ":28088" }},
 	{Protocol: ProtocolNFS, ServiceName: "nfs-server", Port: 2049, URL: func(host string) string { return host + ":/" }},
 }
 

@@ -9,6 +9,7 @@ CONFIG_DIR="${YESNAS_CONFIG_DIR:-/etc/yesnas-server}"
 DATA_ROOT="${YESNAS_DATA_ROOT:-/srv/yesnas}"
 SERVICE_NAME="${YESNAS_SERVICE_NAME:-yesnas-server}"
 DEFAULT_PORT="${YESNAS_PORT:-28080}"
+APACHE_DEFAULT_PORT="${YESNAS_APACHE_PORT:-28081}"
 OAUTH_BROKER_REGISTRATION_SECRET="${OAUTH_BROKER_REGISTRATION_SECRET:-${DEVICE_REGISTRATION_SECRET:-affc5ba6555a784cf0accf2ba8788e3cae4699a15b167ad4d4bb2fd892516bed}}"
 
 STEP=0
@@ -147,6 +148,27 @@ append_once() {
   fi
 }
 
+configure_apache_default_port() {
+  local changed=0
+  local ports_file="/etc/apache2/ports.conf"
+  local default_site="/etc/apache2/sites-available/000-default.conf"
+
+  if [[ -f "${ports_file}" ]] && grep -Eq '^[[:space:]]*Listen[[:space:]]+80[[:space:]]*$' "${ports_file}"; then
+    run_root sed -i -E "s/^[[:space:]]*Listen[[:space:]]+80[[:space:]]*$/Listen ${APACHE_DEFAULT_PORT}/" "${ports_file}"
+    changed=1
+  fi
+  if [[ -f "${default_site}" ]] && grep -Fq '<VirtualHost *:80>' "${default_site}"; then
+    run_root sed -i "s/<VirtualHost \*:80>/<VirtualHost *:${APACHE_DEFAULT_PORT}>/g" "${default_site}"
+    changed=1
+  fi
+  if [[ "${changed}" == "1" ]]; then
+    printf '%s\n' "${APACHE_DEFAULT_PORT}" | run_root tee "${CONFIG_DIR}/apache-default-port.changed" >/dev/null
+    log "Apache default HTTP port changed from 80 to ${APACHE_DEFAULT_PORT}."
+  else
+    log "Apache does not use the default port 80; no default-port change was needed."
+  fi
+}
+
 main() {
   parse_args "$@"
   step "Check system environment"
@@ -238,7 +260,7 @@ main() {
   local sudoers_tmp
   sudoers_tmp="$(mktemp)"
   cat >"${sudoers_tmp}" <<EOF
-${install_user} ALL=(root) NOPASSWD: /usr/bin/lsblk, /usr/sbin/smartctl, /sbin/smartctl, /usr/sbin/mdadm, /sbin/mdadm, /usr/sbin/wipefs, /sbin/wipefs, /usr/sbin/blkid, /sbin/blkid, /usr/bin/mount, /bin/mount, /usr/bin/umount, /bin/umount, /usr/bin/tee, /bin/tee, /usr/sbin/mkfs.btrfs, /sbin/mkfs.btrfs, /usr/bin/mkfs.btrfs, /usr/bin/btrfs, /bin/btrfs, /usr/bin/mkdir, /bin/mkdir, /usr/bin/rm, /bin/rm, /usr/bin/dd, /bin/dd, /usr/bin/sync, /bin/sync, /usr/bin/cp, /bin/cp, /usr/bin/chmod, /bin/chmod, /usr/bin/chown, /bin/chown, /usr/bin/touch, /bin/touch, /usr/bin/mv, /bin/mv, /usr/bin/testparm, /usr/sbin/testparm, /usr/bin/smbpasswd, /usr/sbin/smbpasswd, /usr/bin/systemctl, /bin/systemctl, /usr/bin/setfacl, /usr/bin/getfacl, /usr/sbin/exportfs, /usr/sbin/showmount, /usr/sbin/proftpd, /usr/sbin/apache2ctl, /usr/bin/htpasswd, /usr/bin/fusermount, /bin/fusermount, /usr/bin/fusermount3, /bin/fusermount3, /usr/bin/id, /bin/id, /usr/sbin/dmidecode, /usr/bin/rclone, /usr/local/bin/rclone, /usr/bin/vnstat, /usr/local/bin/vnstat
+${install_user} ALL=(root) NOPASSWD: /usr/bin/lsblk, /usr/sbin/smartctl, /sbin/smartctl, /usr/sbin/mdadm, /sbin/mdadm, /usr/sbin/wipefs, /sbin/wipefs, /usr/sbin/blkid, /sbin/blkid, /usr/bin/mount, /bin/mount, /usr/bin/umount, /bin/umount, /usr/bin/tee, /bin/tee, /usr/bin/sed, /bin/sed, /usr/sbin/mkfs.btrfs, /sbin/mkfs.btrfs, /usr/bin/mkfs.btrfs, /usr/bin/btrfs, /bin/btrfs, /usr/bin/mkdir, /bin/mkdir, /usr/bin/rm, /bin/rm, /usr/bin/dd, /bin/dd, /usr/bin/sync, /bin/sync, /usr/bin/cp, /bin/cp, /usr/bin/chmod, /bin/chmod, /usr/bin/chown, /bin/chown, /usr/bin/touch, /bin/touch, /usr/bin/mv, /bin/mv, /usr/bin/testparm, /usr/sbin/testparm, /usr/bin/smbpasswd, /usr/sbin/smbpasswd, /usr/bin/systemctl, /bin/systemctl, /usr/bin/setfacl, /usr/bin/getfacl, /usr/sbin/exportfs, /usr/sbin/showmount, /usr/sbin/proftpd, /usr/sbin/apache2ctl, /usr/bin/htpasswd, /usr/bin/fusermount, /bin/fusermount, /usr/bin/fusermount3, /bin/fusermount3, /usr/bin/id, /bin/id, /usr/sbin/dmidecode, /usr/bin/rclone, /usr/local/bin/rclone, /usr/bin/vnstat, /usr/local/bin/vnstat
 EOF
   run_root install -m 0440 -o root -g root "${sudoers_tmp}" "${sudoers_file}"
   rm -f "${sudoers_tmp}"
@@ -263,10 +285,11 @@ DefaultRoot ~
 RequireValidShell off
 EOF
 
+  configure_apache_default_port
   run_root a2enmod dav dav_fs auth_basic authn_file headers >/dev/null || true
-  append_once /etc/apache2/ports.conf "Listen 8088"
+  append_once /etc/apache2/ports.conf "Listen 28088"
   cat <<EOF | run_root tee /etc/apache2/sites-available/yesnas-webdav.conf >/dev/null
-<VirtualHost *:8088>
+<VirtualHost *:28088>
     ServerName ${host_name}
     DocumentRoot ${DATA_ROOT}/webdav
 

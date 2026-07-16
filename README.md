@@ -25,7 +25,9 @@ YesNAS Server is the backend service for [YesNAS](https://www.yesnas.com). It pr
 - `amd64` or `arm64` architecture
 - An existing Linux user with `sudo` access
 
-The installer automatically installs and configures the required system components, including Samba, NFS, FTP, WebDAV, Btrfs, rclone, and FFmpeg.
+The installer automatically installs and configures the required system components, including Samba, NFS, FTP, WebDAV, Btrfs, rclone, and FFmpeg. To keep port `80` available for other applications, the Apache default HTTP listener is moved to port `28081` during installation.
+
+The YesNAS-managed WebDAV endpoint listens on port `28088`.
 
 ## One-Command Installation
 
