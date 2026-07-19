@@ -87,7 +87,7 @@ func CollectNetworkInterfaces(ctx context.Context, networkRange NetworkRange, sa
 }
 
 func listVNStatInterfaces(ctx context.Context) ([]string, map[string]string, error) {
-	result, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{}, "vnstat", "--dbiflist")
+	result, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{SuppressSuccessLogs: true}, "vnstat", "--dbiflist")
 	if err != nil {
 		return nil, nil, fmt.Errorf("list vnstat interfaces: %w", err)
 	}

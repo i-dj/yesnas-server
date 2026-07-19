@@ -19,6 +19,11 @@ type cpuSample struct {
 	idle  uint64
 }
 
+type cpuTelemetry struct {
+	temperatureC *float64
+	powerW       *float64
+}
+
 type networkSample struct {
 	rx int64
 	tx int64
@@ -38,6 +43,8 @@ func CollectSystemStatus(ctx context.Context, sampleInterval time.Duration) (Sys
 	}
 
 	cpuBefore := readCPUSample()
+	cpuTelemetryResult := make(chan cpuTelemetry, 1)
+	go func() { cpuTelemetryResult <- readCPUTelemetry(ctx) }()
 	netBefore := readNetworkSample()
 	diskBefore := readDiskIOSample()
 	select {
@@ -46,6 +53,7 @@ func CollectSystemStatus(ctx context.Context, sampleInterval time.Duration) (Sys
 	case <-time.After(sampleInterval):
 	}
 	cpuAfter := readCPUSample()
+	telemetry := <-cpuTelemetryResult
 	netAfter := readNetworkSample()
 	diskAfter := readDiskIOSample()
 
@@ -56,7 +64,7 @@ func CollectSystemStatus(ctx context.Context, sampleInterval time.Duration) (Sys
 		DiskIO:      buildDiskIOStatus(diskBefore, diskAfter, sampleInterval),
 		Network:     buildNetworkStatus(netBefore, netAfter, sampleInterval),
 		FileSharing: collectFileSharingStatus(),
-		CPU:         collectCPUStatus(cpuBefore, cpuAfter),
+		CPU:         collectCPUStatus(cpuBefore, cpuAfter, telemetry),
 		Memory:      collectMemoryStatus(),
 		GPU:         collectGPUStatus(ctx),
 		CheckedAt:   time.Now().UTC().Format(time.RFC3339),
@@ -160,7 +168,7 @@ func buildCPUUsage(before, after cpuSample) float64 {
 	return round1(float64(totalDelta-idleDelta) * 100 / float64(totalDelta))
 }
 
-func collectCPUStatus(before, after cpuSample) CPUStatus {
+func collectCPUStatus(before, after cpuSample, telemetry cpuTelemetry) CPUStatus {
 	model, cores, threads, freq := readCPUInfo()
 	if threads == 0 {
 		threads = runtime.NumCPU()
@@ -168,14 +176,19 @@ func collectCPUStatus(before, after cpuSample) CPUStatus {
 	if cores == 0 {
 		cores = threads
 	}
-	temp := readFirstFloatFromGlob([]string{
-		"/sys/class/thermal/thermal_zone*/temp",
-		"/sys/class/hwmon/hwmon*/temp*_input",
-	}, 1000)
-	fan := readFirstIntFromGlob([]string{"/sys/class/hwmon/hwmon*/fan*_input"})
-	power := readFirstFloatFromGlob([]string{
-		"/sys/class/hwmon/hwmon*/power*_input",
-	}, 1000000)
+	temp := telemetry.temperatureC
+	if temp == nil {
+		temp = readFirstFloatFromGlob([]string{
+			"/sys/class/thermal/thermal_zone*/temp",
+			"/sys/class/hwmon/hwmon*/temp*_input",
+		}, 1000)
+	}
+	power := telemetry.powerW
+	if power == nil {
+		power = readFirstFloatFromGlob([]string{
+			"/sys/class/hwmon/hwmon*/power*_input",
+		}, 1000000)
+	}
 	status := CPUStatus{
 		Model:        model,
 		UsagePercent: buildCPUUsage(before, after),
@@ -183,7 +196,6 @@ func collectCPUStatus(before, after cpuSample) CPUStatus {
 		TemperatureC: temp,
 		Cores:        cores,
 		Threads:      threads,
-		FanRPM:       fan,
 		PowerW:       power,
 	}
 	if status.Model == "" {
@@ -652,24 +664,6 @@ func readFirstFloatFromGlob(patterns []string, divisor float64) *float64 {
 				value = value / divisor
 			}
 			value = round1(value)
-			return &value
-		}
-	}
-	return nil
-}
-
-func readFirstIntFromGlob(patterns []string) *int {
-	for _, pattern := range patterns {
-		matches, _ := filepath.Glob(pattern)
-		for _, path := range matches {
-			content, err := os.ReadFile(path)
-			if err != nil {
-				continue
-			}
-			value, err := strconv.Atoi(strings.TrimSpace(string(content)))
-			if err != nil || value <= 0 {
-				continue
-			}
 			return &value
 		}
 	}

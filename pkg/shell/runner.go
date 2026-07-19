@@ -23,10 +23,11 @@ type Result struct {
 }
 
 type Options struct {
-	UseSudo            bool
-	Stdin              string
-	LogStdoutOnSuccess bool
-	LogStderrOnSuccess bool
+	UseSudo             bool
+	Stdin               string
+	LogStdoutOnSuccess  bool
+	LogStderrOnSuccess  bool
+	SuppressSuccessLogs bool
 }
 
 var preferredCommandPaths = map[string][]string{
@@ -85,7 +86,9 @@ func RunWithOptions(ctx context.Context, opts Options, command string, args ...s
 		cmd.Stdin = strings.NewReader(opts.Stdin)
 	}
 
-	log.Printf("[CMD] start: %s", renderCommand(execCommand, execArgs))
+	if !opts.SuppressSuccessLogs {
+		log.Printf("[CMD] start: %s", renderCommand(execCommand, execArgs))
+	}
 	err := cmd.Run()
 	duration := time.Since(start)
 
@@ -98,7 +101,9 @@ func RunWithOptions(ctx context.Context, opts Options, command string, args ...s
 		ExitCode: exitCode(err),
 	}
 
-	log.Printf("[CMD] done: %s exit=%d duration=%s", renderCommand(execCommand, execArgs), result.ExitCode, duration)
+	if !opts.SuppressSuccessLogs || err != nil {
+		log.Printf("[CMD] done: %s exit=%d duration=%s", renderCommand(execCommand, execArgs), result.ExitCode, duration)
+	}
 	stdoutText := strings.TrimSpace(result.Stdout)
 	stderrText := strings.TrimSpace(result.Stderr)
 	if err != nil {
@@ -108,7 +113,7 @@ func RunWithOptions(ctx context.Context, opts Options, command string, args ...s
 		if stderrText != "" {
 			log.Printf("[CMD] stderr: %s", stderrText)
 		}
-	} else {
+	} else if !opts.SuppressSuccessLogs {
 		if stdoutText != "" {
 			if opts.LogStdoutOnSuccess {
 				log.Printf("[CMD] stdout: %s", stdoutText)

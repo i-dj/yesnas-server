@@ -107,7 +107,7 @@ func FormatPool(ctx context.Context, pool *StoragePool, req FormatRequest) (map[
 		return nil, fmt.Errorf("create mount path: %w", err)
 	}
 
-	mkfsArgs := append([]string{"-f", "-L", pool.Name, "-d", raidLevel, "-m", raidLevel}, devicePaths...)
+	mkfsArgs := append([]string{"-K", "-f", "-L", pool.Name, "-d", raidLevel, "-m", raidLevel}, devicePaths...)
 	if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "mkfs.btrfs", mkfsArgs...); err != nil {
 		return nil, fmt.Errorf("mkfs.btrfs failed: %w", err)
 	}

@@ -7,7 +7,7 @@ INSTALL_DIR="${YESNAS_INSTALL_DIR:-/opt/yesnas/server}"
 SERVICE_NAME="${YESNAS_SERVICE_NAME:-yesnas-server}"
 
 STEP=0
-TOTAL_STEPS=7
+TOTAL_STEPS=8
 
 log() {
   printf '\033[1;32m[YesNAS]\033[0m %s\n' "$*"
@@ -156,6 +156,22 @@ main() {
   run_root install -m 0644 -o "${install_user}" -g "${install_group}" \
     "${extracted_dir}/data/GeoLite2-City.mmdb" "${INSTALL_DIR}/data/GeoLite2-City.mmdb"
   rm -rf "${tmp_dir}"
+
+  step "Configure CPU telemetry permission"
+  if [[ "${install_user}" != "root" ]] && command -v turbostat >/dev/null 2>&1; then
+    local turbostat_path
+    local turbostat_sudoers
+    local turbostat_sudoers_tmp
+    turbostat_path="$(command -v turbostat)"
+    turbostat_sudoers="/etc/sudoers.d/yesnas-turbostat"
+    turbostat_sudoers_tmp="$(mktemp)"
+    printf '%s ALL=(root) NOPASSWD: %s\n' "${install_user}" "${turbostat_path}" >"${turbostat_sudoers_tmp}"
+    run_root install -m 0440 -o root -g root "${turbostat_sudoers_tmp}" "${turbostat_sudoers}"
+    rm -f "${turbostat_sudoers_tmp}"
+    run_root visudo -cf "${turbostat_sudoers}" >/dev/null
+  else
+    log "turbostat permission update not required."
+  fi
 
   step "Restart YesNAS service"
   run_root systemctl daemon-reload

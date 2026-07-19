@@ -3,7 +3,6 @@ package storagepool
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,45 +19,7 @@ const (
 	cloudBenchmarkSizeBytes = 256 * 1024 * 1024
 )
 
-func (h *Handler) HandleBenchmarkPoolStream(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, "SSE_NOT_SUPPORTED", "SSE is not supported by this server")
-		return
-	}
-
-	pool, err := resolveBenchmarkPool(r.Context(), r.PathValue("poolId"))
-	if err != nil {
-		writeAPIError(w, http.StatusNotFound, "STORAGE_POOL_NOT_FOUND", "Storage pool not found")
-		return
-	}
-
-	sizeGiB, err := parseBenchmarkSizeGiB(r)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "INVALID_SIZE_GIB", err.Error())
-		return
-	}
-
-	prepareSSE(w)
-	writeSSEEvent(w, flusher, "ready", map[string]any{
-		"poolId":  pool.ID,
-		"sizeGiB": sizeGiB,
-	})
-
-	result, streamErr := BenchmarkPoolStream(r.Context(), pool, BenchmarkRequest{SizeGiB: sizeGiB}, func(progress BenchmarkProgress) bool {
-		return writeSSEEvent(w, flusher, "progress", progress)
-	})
-	if streamErr != nil {
-		writeSSEEvent(w, flusher, "error", map[string]any{
-			"code":    "BENCHMARK_STORAGE_POOL_FAILED",
-			"message": streamErr.Error(),
-		})
-		return
-	}
-	writeSSEEvent(w, flusher, "completed", result)
-}
-
-func resolveBenchmarkPool(ctx context.Context, poolID string) (*StoragePool, error) {
+func ResolveBenchmarkPool(ctx context.Context, poolID string) (*StoragePool, error) {
 	pool, err := Get(poolID)
 	if err == nil {
 		return pool, nil
@@ -318,21 +279,6 @@ func maxBenchmarkSizeGiB(value int) int {
 		return defaultBenchmarkSizeGiB
 	}
 	return value
-}
-
-func parseBenchmarkSizeGiB(r *http.Request) (int, error) {
-	raw := r.URL.Query().Get("sizeGiB")
-	if raw == "" {
-		return defaultBenchmarkSizeGiB, nil
-	}
-	sizeGiB, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0, fmt.Errorf("sizeGiB must be an integer")
-	}
-	if sizeGiB <= 0 {
-		return 0, fmt.Errorf("sizeGiB must be greater than 0")
-	}
-	return sizeGiB, nil
 }
 
 func runBenchmarkWriteStream(ctx context.Context, poolID string, sizeGiB int, path string, totalBytes int64, commandOptions commandrunner.Options, emit func(BenchmarkProgress) bool) (float64, error) {

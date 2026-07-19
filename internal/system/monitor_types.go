@@ -61,7 +61,6 @@ type CPUStatus struct {
 	TemperatureC *float64 `json:"temperatureC,omitempty"`
 	Cores        int      `json:"cores"`
 	Threads      int      `json:"threads"`
-	FanRPM       *int     `json:"fanRpm,omitempty"`
 	PowerW       *float64 `json:"powerW,omitempty"`
 }
 

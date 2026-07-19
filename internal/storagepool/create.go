@@ -85,7 +85,7 @@ func CreatePool(ctx context.Context, req CreateRequest) (*StoragePool, error) {
 		return nil, err
 	}
 
-	mkfsArgs := append([]string{"-f", "-L", req.Name, "-d", raidLevel, "-m", raidLevel}, devicePaths...)
+	mkfsArgs := append([]string{"-K", "-f", "-L", req.Name, "-d", raidLevel, "-m", raidLevel}, devicePaths...)
 	if _, err := commandrunner.RunWithOptions(ctx, commandrunner.Options{UseSudo: true}, "mkfs.btrfs", mkfsArgs...); err != nil {
 		return nil, fmt.Errorf("mkfs.btrfs failed: %w", err)
 	}

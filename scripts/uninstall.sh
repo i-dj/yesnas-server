@@ -128,7 +128,7 @@ main() {
   restore_apache_default_port
 
   step "Remove YesNAS sudoers allowlist"
-  run_root rm -f /etc/sudoers.d/yesnas
+  run_root rm -f /etc/sudoers.d/yesnas /etc/sudoers.d/yesnas-turbostat
 
   step "Remove SMB / FTP / WebDAV / NFS base config files"
   remove_line_once /etc/samba/smb.conf "include = /etc/samba/yesnas-shares.conf"

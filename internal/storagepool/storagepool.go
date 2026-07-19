@@ -11,6 +11,4 @@ func NewHandler() *Handler {
 var (
 	writeJSON     = httpx.WriteJSON
 	writeAPIError = httpx.WriteAPIError
-	prepareSSE    = httpx.PrepareSSE
-	writeSSEEvent = httpx.WriteSSEEvent
 )

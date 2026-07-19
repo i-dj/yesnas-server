@@ -11,6 +11,7 @@ import (
 	authmodule "nas-server/internal/auth"
 	cloudmonitor "nas-server/internal/cloudmonitor"
 	dockermodule "nas-server/internal/docker"
+	eventsmodule "nas-server/internal/events"
 	filesmodule "nas-server/internal/files"
 	jobsmodule "nas-server/internal/jobs"
 	sharingmodule "nas-server/internal/sharing"
@@ -87,6 +88,7 @@ func newRouter() http.Handler {
 	auditHandler := auditmodule.NewHandler()
 	authHandler := authmodule.NewHandler()
 	dockerHandler := dockermodule.NewHandler()
+	eventsHandler := eventsmodule.NewHandler()
 	jobsHandler := jobsmodule.NewHandler()
 	sharingHandler := sharingmodule.NewHandler()
 	storagePoolHandler := storagepool.NewHandler()
@@ -105,11 +107,9 @@ func newRouter() http.Handler {
 	mux.HandleFunc("POST /api/v1/storages/{provider}/complete", systemHandler.HandleCompleteCloudConnect)
 	mux.HandleFunc("GET /api/v1/system/disks", systemHandler.HandleSystemDisks)
 	mux.HandleFunc("GET /api/v1/system/status", systemHandler.HandleSystemStatus)
-	mux.HandleFunc("GET /api/v1/system/status/stream", systemHandler.HandleSystemStatusStream)
 	mux.HandleFunc("GET /api/v1/system/hardware", systemHandler.HandleHardware)
-	mux.HandleFunc("GET /api/v1/system/hardware/stream", systemHandler.HandleHardwareStream)
 	mux.HandleFunc("GET /api/v1/system/network", systemHandler.HandleNetworkInterfaces)
-	mux.HandleFunc("GET /api/v1/system/network/stream", systemHandler.HandleNetworkInterfacesStream)
+	mux.HandleFunc("GET /api/v1/events", eventsHandler.HandleEvents)
 	mux.HandleFunc("GET /api/v1/system/raid/candidates", systemHandler.HandleRaidCandidates)
 	mux.HandleFunc("GET /api/v1/system/storage-pools", storagePoolHandler.HandleListPools)
 	mux.HandleFunc("POST /api/v1/system/storage-pools", storagePoolHandler.HandleCreatePool)
@@ -117,15 +117,12 @@ func newRouter() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/system/storage-pools/{poolId}", storagePoolHandler.HandleDeletePool)
 	mux.HandleFunc("POST /api/v1/system/storage-pools/{poolId}/format", storagePoolHandler.HandleFormatPool)
 	mux.HandleFunc("POST /api/v1/system/storage-pools/{poolId}/devices/replace", storagePoolHandler.HandleReplaceDevice)
-	mux.HandleFunc("GET /api/v1/system/storage-pools/{poolId}/benchmark/stream", storagePoolHandler.HandleBenchmarkPoolStream)
 	mux.HandleFunc("GET /api/v1/system/storage-pools/{poolId}/snapshots", storagePoolHandler.HandleListSnapshots)
 	mux.HandleFunc("POST /api/v1/system/storage-pools/{poolId}/snapshots", storagePoolHandler.HandleCreateSnapshot)
 	mux.HandleFunc("DELETE /api/v1/system/storage-pools/{poolId}/snapshots/{snapshotId}", storagePoolHandler.HandleDeleteSnapshot)
 	mux.HandleFunc("POST /api/v1/system/storage-pools/{poolId}/snapshots/{snapshotId}/restore", storagePoolHandler.HandleRestoreSnapshot)
 	mux.HandleFunc("GET /api/v1/storages/io-stats", systemHandler.HandleAllStorageIOStats)
-	mux.HandleFunc("GET /api/v1/storages/io-stats/stream", systemHandler.HandleAllStorageIOStatsStream)
 	mux.HandleFunc("GET /api/v1/storages/{storage}/io-stats", systemHandler.HandleStorageIOStats)
-	mux.HandleFunc("GET /api/v1/storages/{storage}/io-stats/stream", systemHandler.HandleStorageIOStatsStream)
 	mux.HandleFunc("GET /api/v1/files/tags", filesHandler.HandleGlobalTagList)
 	mux.HandleFunc("GET /api/v1/files/trash", filesHandler.HandleGlobalTrashList)
 	mux.HandleFunc("GET /api/v1/storages/{storage}/files/{fileId}/thumbnail", filesHandler.HandleThumbnail)
@@ -148,7 +145,6 @@ func newRouter() http.Handler {
 	mux.HandleFunc("POST /api/v1/jobs/{jobId}/resume", jobsHandler.HandleResume)
 	mux.HandleFunc("POST /api/v1/jobs/{jobId}/cancel", jobsHandler.HandleCancel)
 	mux.HandleFunc("GET /api/v1/docker/containers", dockerHandler.HandleListContainers)
-	mux.HandleFunc("GET /api/v1/docker/containers/stream", dockerHandler.HandleListContainersStream)
 	mux.HandleFunc("PUT /api/v1/users/me/profile", usersHandler.HandleUpdateMyProfile)
 	mux.HandleFunc("PUT /api/v1/users/me/password", usersHandler.HandleUpdateMyPassword)
 	mux.HandleFunc("GET /api/v1/users", usersHandler.HandleList)

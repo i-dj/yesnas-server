@@ -28,6 +28,8 @@ func CollectHardwareSnapshot(ctx context.Context, sampleInterval time.Duration) 
 	}
 
 	cpuBefore := readCPUSample()
+	cpuTelemetryResult := make(chan cpuTelemetry, 1)
+	go func() { cpuTelemetryResult <- readCPUTelemetry(ctx) }()
 	netBefore := readInterfaceCounterSamples(ifaces)
 	select {
 	case <-ctx.Done():
@@ -35,6 +37,7 @@ func CollectHardwareSnapshot(ctx context.Context, sampleInterval time.Duration) 
 	case <-time.After(sampleInterval):
 	}
 	cpuAfter := readCPUSample()
+	telemetry := <-cpuTelemetryResult
 	netAfter := readInterfaceCounterSamples(ifaces)
 
 	disks, err := listSystemDisksDetails(ctx)
@@ -49,7 +52,7 @@ func CollectHardwareSnapshot(ctx context.Context, sampleInterval time.Duration) 
 
 	return HardwareSnapshot{
 		System:            collectHardwareSystemInfo(),
-		CPU:               collectCPUStatus(cpuBefore, cpuAfter),
+		CPU:               collectCPUStatus(cpuBefore, cpuAfter, telemetry),
 		Motherboard:       collectMotherboardStatus(),
 		Memory:            collectMemoryStatus(),
 		Disks:             disks.Items,
