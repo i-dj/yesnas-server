@@ -66,6 +66,7 @@ func CollectSystemStatus(ctx context.Context, sampleInterval time.Duration) (Sys
 		FileSharing: collectFileSharingStatus(),
 		CPU:         collectCPUStatus(cpuBefore, cpuAfter, telemetry),
 		Memory:      collectMemoryStatus(),
+		Processes:   collectProcessStatus(),
 		GPU:         collectGPUStatus(ctx),
 		CheckedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
@@ -273,6 +274,53 @@ func collectMemoryStatus() MemoryStatus {
 		Manufacturer:    manufacturer,
 		PartNumber:      partNumber,
 	}
+}
+
+func collectProcessStatus() ProcessStatus {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return ProcessStatus{}
+	}
+
+	status := ProcessStatus{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := strconv.Atoi(entry.Name()); err != nil {
+			continue
+		}
+		status.Total++
+		content, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "status"))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(content), "\n") {
+			switch {
+			case strings.HasPrefix(line, "State:"):
+				fields := strings.Fields(line)
+				if len(fields) < 2 {
+					continue
+				}
+				switch fields[1] {
+				case "R":
+					status.Running++
+				case "S", "D", "I":
+					status.Sleeping++
+				}
+			case strings.HasPrefix(line, "Threads:"):
+				fields := strings.Fields(line)
+				if len(fields) < 2 {
+					continue
+				}
+				threads, err := strconv.Atoi(fields[1])
+				if err == nil {
+					status.Threads += threads
+				}
+			}
+		}
+	}
+	return status
 }
 
 func readMemoryHardwareInfo() (string, *int, string, string) {

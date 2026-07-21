@@ -242,6 +242,16 @@ func buildDiskPartitions(device lsblkDevice, poolUsageByDevice map[string][]pkgd
 	return items
 }
 
+func childPartitions(children []lsblkDevice) []lsblkDevice {
+	partitions := make([]lsblkDevice, 0, len(children))
+	for _, child := range children {
+		if strings.EqualFold(strings.TrimSpace(child.Type), "part") {
+			partitions = append(partitions, child)
+		}
+	}
+	return partitions
+}
+
 func buildPoolUsageMap(pools []storagepool.StoragePool) map[string][]pkgdisks.DiskUsage {
 	result := make(map[string][]pkgdisks.DiskUsage)
 	for _, pool := range pools {

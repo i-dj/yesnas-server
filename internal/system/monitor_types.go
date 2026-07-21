@@ -9,6 +9,7 @@ type SystemStatusSnapshot struct {
 	FileSharing FileSharingStatus  `json:"fileSharing"`
 	CPU         CPUStatus          `json:"cpu"`
 	Memory      MemoryStatus       `json:"memory"`
+	Processes   ProcessStatus      `json:"processes"`
 	GPU         *GPUStatus         `json:"gpu,omitempty"`
 	CheckedAt   string             `json:"checkedAt"`
 }
@@ -74,6 +75,13 @@ type MemoryStatus struct {
 	SpeedMHz        *int    `json:"speedMHz"`
 	Manufacturer    string  `json:"manufacturer"`
 	PartNumber      string  `json:"partNumber"`
+}
+
+type ProcessStatus struct {
+	Total    int `json:"total"`
+	Running  int `json:"running"`
+	Sleeping int `json:"sleeping"`
+	Threads  int `json:"threads"`
 }
 
 type GPUStatus struct {

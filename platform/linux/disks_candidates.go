@@ -87,33 +87,11 @@ func collectCandidates(device lsblkDevice, storageMounts []string) []pkgdisks.Ca
 		return nil
 	}
 
-	partitions := childPartitions(device.Children)
-	if len(partitions) == 0 {
-		candidate, ok := classifyWholeDisk(device, storageMounts)
-		if ok {
-			return []pkgdisks.Candidate{candidate}
-		}
-		return nil
+	candidate, ok := classifyWholeDisk(device, storageMounts)
+	if ok {
+		return []pkgdisks.Candidate{candidate}
 	}
-
-	items := make([]pkgdisks.Candidate, 0, len(partitions))
-	for _, partition := range partitions {
-		candidate, ok := classifyPartition(partition, device, storageMounts)
-		if ok {
-			items = append(items, candidate)
-		}
-	}
-	return items
-}
-
-func childPartitions(children []lsblkDevice) []lsblkDevice {
-	partitions := make([]lsblkDevice, 0, len(children))
-	for _, child := range children {
-		if child.Type == "part" {
-			partitions = append(partitions, child)
-		}
-	}
-	return partitions
+	return nil
 }
 
 func shouldIgnoreBlockDevice(device lsblkDevice) bool {
@@ -147,27 +125,6 @@ func classifyWholeDisk(device lsblkDevice, storageMounts []string) (pkgdisks.Can
 	return buildCandidate(device, sizeBytes, "", "disk", "unused-whole-disk", true, false, ""), true
 }
 
-func classifyPartition(device lsblkDevice, parent lsblkDevice, storageMounts []string) (pkgdisks.Candidate, bool) {
-	sizeBytes, err := readBlockDeviceSizeBytes(device.KName)
-	if device.Path == "" || err != nil || sizeBytes == 0 || device.RO {
-		return pkgdisks.Candidate{}, false
-	}
-	if isUsedByStorage(device, storageMounts) {
-		return pkgdisks.Candidate{}, false
-	}
-	if hasMountpoint(device) {
-		return pkgdisks.Candidate{}, false
-	}
-	merged := mergePartitionMetadata(device, parent)
-	if hasBlockingChildren(device.Children) {
-		return buildCandidate(merged, sizeBytes, parent.Path, "partition", "partition-has-child-devices", false, true, "Partition has child block devices and should be detached or wiped before creating RAID"), true
-	}
-	if hasKnownFilesystem(device) {
-		return buildCandidate(merged, sizeBytes, parent.Path, "partition", "unmounted-partition-with-filesystem", false, true, "Partition has an existing filesystem signature and should be wiped before creating RAID"), true
-	}
-	return buildCandidate(merged, sizeBytes, parent.Path, "partition", "unused-partition", true, false, ""), true
-}
-
 func buildCandidate(device lsblkDevice, sizeBytes uint64, parentPath, candidateType, reason string, eligible bool, needsWipe bool, warning string) pkgdisks.Candidate {
 	return pkgdisks.Candidate{
 		Path:          device.Path,
@@ -194,28 +151,6 @@ func buildCandidate(device lsblkDevice, sizeBytes uint64, parentPath, candidateT
 		Hotplug:       device.Hotplug,
 		ReadOnly:      device.RO,
 	}
-}
-
-func mergePartitionMetadata(partition lsblkDevice, parent lsblkDevice) lsblkDevice {
-	if strings.TrimSpace(partition.Model) == "" {
-		partition.Model = parent.Model
-	}
-	if strings.TrimSpace(partition.Serial) == "" {
-		partition.Serial = parent.Serial
-	}
-	if strings.TrimSpace(partition.Vendor) == "" {
-		partition.Vendor = parent.Vendor
-	}
-	if strings.TrimSpace(partition.Tran) == "" {
-		partition.Tran = parent.Tran
-	}
-	if !partition.RM {
-		partition.RM = parent.RM
-	}
-	if !partition.Hotplug {
-		partition.Hotplug = parent.Hotplug
-	}
-	return partition
 }
 
 func normalizedMountpoints(device lsblkDevice) []string {
