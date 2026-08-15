@@ -235,6 +235,34 @@ func EnsureJobsSchema() error {
 	})
 }
 
+func EnsureDockerSchema() error {
+	if DB == nil {
+		return fmt.Errorf("database is not initialized; call InitDB first")
+	}
+	if _, err := DB.Exec(`
+CREATE TABLE IF NOT EXISTS docker_image_metadata (
+	image_ref      TEXT PRIMARY KEY,
+	icon          TEXT DEFAULT 'docker',
+	created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+	updated_at    DATETIME,
+	last_pulled_at DATETIME
+);
+`); err != nil {
+		return fmt.Errorf("failed to create docker metadata tables: %w", err)
+	}
+	if err := ensureColumns("docker_image_metadata", map[string]string{
+		"icon":           "TEXT DEFAULT 'docker'",
+		"created_at":     "DATETIME DEFAULT CURRENT_TIMESTAMP",
+		"updated_at":     "DATETIME",
+		"last_pulled_at": "DATETIME",
+	}); err != nil {
+		return err
+	}
+	return ensureIndexes([]string{
+		`CREATE INDEX IF NOT EXISTS idx_docker_image_metadata_last_pulled_at ON docker_image_metadata(last_pulled_at DESC)`,
+	})
+}
+
 func EnsureUsersSchema() error {
 	if DB == nil {
 		return fmt.Errorf("database is not initialized; call InitDB first")

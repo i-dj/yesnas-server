@@ -48,6 +48,9 @@ func newRouter() http.Handler {
 	if err := database.EnsureJobsSchema(); err != nil {
 		log.Fatalf("Ensure Jobs Schema error: %v", err)
 	}
+	if err := database.EnsureDockerSchema(); err != nil {
+		log.Fatalf("Ensure Docker Schema error: %v", err)
+	}
 	if err := database.EnsureUsersSchema(); err != nil {
 		log.Fatalf("Ensure Users Schema error: %v", err)
 	}
@@ -101,6 +104,8 @@ func newRouter() http.Handler {
 	mux.HandleFunc("GET /api/v1/logs", auditHandler.HandleList)
 	mux.HandleFunc("GET /api/v1/logs/heatmap", auditHandler.HandleHeatmap)
 	mux.HandleFunc("GET /api/v1/storages", systemHandler.HandleStorageList)
+	mux.HandleFunc("POST /api/v1/storages/network", systemHandler.HandleCreateNetworkStorage)
+	mux.HandleFunc("POST /api/v1/storages/network/smb/shares", systemHandler.HandleListSMBShares)
 	mux.HandleFunc("GET /api/v1/storages/{provider}/connect", systemHandler.HandleStartCloudConnectRedirect)
 	mux.HandleFunc("POST /api/v1/storages/{provider}/connect", systemHandler.HandleStartCloudConnect)
 	mux.HandleFunc("GET /api/v1/storages/{provider}/oauth-status/{sessionId}", systemHandler.HandleCloudOAuthStatus)
@@ -127,6 +132,10 @@ func newRouter() http.Handler {
 	mux.HandleFunc("GET /api/v1/files/trash", filesHandler.HandleGlobalTrashList)
 	mux.HandleFunc("GET /api/v1/storages/{storage}/files/{fileId}/thumbnail", filesHandler.HandleThumbnail)
 	mux.HandleFunc("GET /api/v1/storages/{storage}/files/{fileId}/content", filesHandler.HandleContent)
+	mux.HandleFunc("GET /api/v1/storages/{storage}/files/{fileId}/playable-content", filesHandler.HandlePlayableContent)
+	mux.HandleFunc("GET /api/v1/storages/{storage}/files/{fileId}/hls/index.m3u8", filesHandler.HandleHLSManifest)
+	mux.HandleFunc("GET /api/v1/storages/{storage}/files/{fileId}/hls/{segment}", filesHandler.HandleHLSSegment)
+	mux.HandleFunc("POST /api/v1/storages/{storage}/files/{fileId}/hls/stop", filesHandler.HandleHLSStop)
 	mux.HandleFunc("PATCH /api/v1/storages/{storage}/files/{fileId}", filesHandler.HandleRename)
 	mux.HandleFunc("POST /api/v1/storages/{storage}/files/{fileId}/conflicts", filesHandler.HandleConflictCheck)
 	mux.HandleFunc("POST /api/v1/storages/{storage}/files/{fileId}/move", filesHandler.HandleMove)
@@ -145,6 +154,11 @@ func newRouter() http.Handler {
 	mux.HandleFunc("POST /api/v1/jobs/{jobId}/resume", jobsHandler.HandleResume)
 	mux.HandleFunc("POST /api/v1/jobs/{jobId}/cancel", jobsHandler.HandleCancel)
 	mux.HandleFunc("GET /api/v1/docker/containers", dockerHandler.HandleListContainers)
+	mux.HandleFunc("GET /api/v1/docker/images", dockerHandler.HandleListImages)
+	mux.HandleFunc("POST /api/v1/docker/images/pull/stream", dockerHandler.HandlePullImageStream)
+	mux.HandleFunc("GET /api/v1/docker/compose/projects", dockerHandler.HandleListComposeProjects)
+	mux.HandleFunc("GET /api/v1/docker/networks", dockerHandler.HandleListNetworks)
+	mux.HandleFunc("GET /api/v1/docker/volumes", dockerHandler.HandleListVolumes)
 	mux.HandleFunc("GET /api/v1/users/me/profile", usersHandler.HandleGetMyProfile)
 	mux.HandleFunc("PUT /api/v1/users/me/profile", usersHandler.HandleUpdateMyProfile)
 	mux.HandleFunc("PUT /api/v1/users/me/password", usersHandler.HandleUpdateMyPassword)

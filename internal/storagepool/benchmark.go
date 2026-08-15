@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"nas-server/internal/storage"
@@ -199,7 +198,7 @@ func BenchmarkCloudPoolStream(ctx context.Context, pool *StoragePool, sizeGiB in
 }
 
 func isCloudBenchmarkPool(pool *StoragePool) bool {
-	return pool != nil && strings.TrimSpace(pool.Filesystem) != "" && strings.TrimSpace(pool.Filesystem) != "btrfs"
+	return pool != nil && isCloudProvider(pool.Filesystem)
 }
 
 func benchmarkCommandOptions(pool *StoragePool) commandrunner.Options {

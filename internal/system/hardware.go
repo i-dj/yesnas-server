@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"nas-server/pkg/disks"
 )
 
 const defaultHardwareInterval = 3 * time.Second
@@ -57,6 +59,34 @@ func CollectHardwareSnapshot(ctx context.Context, sampleInterval time.Duration) 
 		Memory:            collectMemoryStatus(),
 		Disks:             disks.Items,
 		GPUs:              collectHardwareGPUs(ctx),
+		NetworkInterfaces: networkInterfaces,
+		CheckedAt:         time.Now().UTC().Format(time.RFC3339),
+	}, nil
+}
+
+func CollectHardwareSnapshotBasic(ctx context.Context) (HardwareSnapshot, error) {
+	ifaces, aliases, err := listVNStatInterfaces(ctx)
+	if err != nil || len(ifaces) == 0 {
+		ifaces = listSystemInterfaces()
+		if aliases == nil {
+			aliases = map[string]string{}
+		}
+	}
+
+	cpuSample := readCPUSample()
+	netSample := readInterfaceCounterSamples(ifaces)
+	networkInterfaces := make([]NetworkInterfaceStatus, 0, len(ifaces))
+	for _, name := range ifaces {
+		networkInterfaces = append(networkInterfaces, buildNetworkInterfaceStatus(name, aliases[name], netSample[name], netSample[name], time.Second))
+	}
+
+	return HardwareSnapshot{
+		System:            collectHardwareSystemInfo(),
+		CPU:               collectCPUStatus(cpuSample, cpuSample, cpuTelemetry{}),
+		Motherboard:       collectMotherboardStatus(),
+		Memory:            collectMemoryUsageStatus(),
+		Disks:             []disks.DiskInfo{},
+		GPUs:              []HardwareGPUStatus{},
 		NetworkInterfaces: networkInterfaces,
 		CheckedAt:         time.Now().UTC().Format(time.RFC3339),
 	}, nil

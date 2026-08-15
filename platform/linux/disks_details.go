@@ -19,7 +19,10 @@ import (
 	commandrunner "nas-server/pkg/shell"
 )
 
-const defaultSectorSize = 512
+const (
+	defaultSectorSize = 512
+	nvmeDataUnitBytes = 512000
+)
 
 var diskStatsCache = struct {
 	sync.Mutex
@@ -101,10 +104,14 @@ type ataSmartRawData struct {
 }
 
 type nvmeSmartHealthInfo struct {
-	Temperature     int    `json:"temperature"`
-	PercentageUsed  uint64 `json:"percentage_used"`
-	UnsafeShutdowns uint64 `json:"unsafe_shutdowns"`
-	PowerCycles     uint64 `json:"power_cycles"`
+	Temperature      int    `json:"temperature"`
+	PercentageUsed   uint64 `json:"percentage_used"`
+	DataUnitsRead    uint64 `json:"data_units_read"`
+	DataUnitsWritten uint64 `json:"data_units_written"`
+	HostReads        uint64 `json:"host_reads"`
+	HostWrites       uint64 `json:"host_writes"`
+	UnsafeShutdowns  uint64 `json:"unsafe_shutdowns"`
+	PowerCycles      uint64 `json:"power_cycles"`
 }
 
 type smartMessage struct {
@@ -540,11 +547,27 @@ func applySMART(info *pkgdisks.DiskInfo, smart smartctlResponse) {
 	if healthPercent := detectHealthPercent(smart); healthPercent != nil {
 		info.HealthPercent = healthPercent
 	}
+	applyNVMELifetimeStats(info, smart.NVMeSmartHealthInformationLog)
 
 	if info.TemperatureC == nil {
 		if temp := detectTemperature(smart); temp != nil {
 			info.TemperatureC = temp
 		}
+	}
+}
+
+func applyNVMELifetimeStats(info *pkgdisks.DiskInfo, health nvmeSmartHealthInfo) {
+	if health.DataUnitsRead > 0 {
+		info.ReadBytesTotal = health.DataUnitsRead * nvmeDataUnitBytes
+	}
+	if health.DataUnitsWritten > 0 {
+		info.WriteBytesTotal = health.DataUnitsWritten * nvmeDataUnitBytes
+	}
+	if health.HostReads > 0 {
+		info.ReadOpsTotal = health.HostReads
+	}
+	if health.HostWrites > 0 {
+		info.WriteOpsTotal = health.HostWrites
 	}
 }
 

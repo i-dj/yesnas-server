@@ -96,7 +96,7 @@ func buildResponse(ctx context.Context, pool StoragePool) Response {
 func BuildCloudResponses(ctx context.Context, items []storage.Storage) []Response {
 	responses := make([]Response, 0, len(items))
 	for _, item := range items {
-		if !isCloudStorage(item) {
+		if !isCloudStorage(item) && !isNetworkStorage(item) {
 			continue
 		}
 		warnings := []string{}
@@ -124,8 +124,20 @@ func isCloudStorage(item storage.Storage) bool {
 	return isCloudProvider(item.Provider)
 }
 
+func isNetworkStorage(item storage.Storage) bool {
+	if storage.IsNetworkProvider(item.Provider) {
+		return true
+	}
+	switch item.Type {
+	case storage.FTP, storage.WebDAV, storage.SMB, storage.NFS:
+		return true
+	default:
+		return false
+	}
+}
+
 func isCloudPoolRecord(pool StoragePool) bool {
-	return isCloudProvider(pool.Filesystem)
+	return isCloudProvider(pool.Filesystem) || storage.IsNetworkProvider(pool.Filesystem)
 }
 
 func isCloudProvider(provider string) bool {
@@ -173,12 +185,20 @@ func buildCloudResponse(item storage.Storage) Response {
 
 	warnings := []string{}
 	if item.Status == storage.StatusOnline && !mounted {
-		warnings = append(warnings, "cloud storage is online, but the local mount is not active")
+		if isNetworkStorage(item) {
+			warnings = append(warnings, "network storage is online, but the local mount is not active")
+		} else {
+			warnings = append(warnings, "cloud storage is online, but the local mount is not active")
+		}
 	}
 
+	kind := "cloud"
+	if isNetworkStorage(item) {
+		kind = "network"
+	}
 	resp := Response{
 		StoragePool:   cloudStoragePool(item),
-		Kind:          "cloud",
+		Kind:          kind,
 		Provider:      item.Provider,
 		RootPath:      item.RootPath,
 		AccountEmail:  item.Username,

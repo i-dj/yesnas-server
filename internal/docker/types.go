@@ -36,3 +36,57 @@ type ContainerMount struct {
 	ReadWrite   bool   `json:"readWrite"`
 	Name        string `json:"name,omitempty"`
 }
+
+type Image struct {
+	ID         string `json:"id"`
+	Repository string `json:"repository"`
+	Tag        string `json:"tag"`
+	Digest     string `json:"digest,omitempty"`
+	Size       string `json:"size"`
+	CreatedAt  string `json:"createdAt,omitempty"`
+	Created    string `json:"created,omitempty"`
+	Icon       string `json:"icon,omitempty"`
+}
+
+type Network struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Driver     string `json:"driver"`
+	Scope      string `json:"scope"`
+	Internal   bool   `json:"internal"`
+	IPv6       bool   `json:"ipv6"`
+	Subnet     string `json:"subnet,omitempty"`
+	Gateway    string `json:"gateway,omitempty"`
+	Containers int    `json:"containers"`
+}
+
+type Volume struct {
+	Name       string `json:"name"`
+	Driver     string `json:"driver"`
+	Mountpoint string `json:"mountpoint"`
+	Scope      string `json:"scope,omitempty"`
+	CreatedAt  string `json:"createdAt,omitempty"`
+}
+
+type ComposeProject struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	ConfigFiles string `json:"configFiles,omitempty"`
+	WorkingDir  string `json:"workingDir,omitempty"`
+	Environment string `json:"environment,omitempty"`
+	Services    string `json:"services,omitempty"`
+}
+
+type ImagePullRequest struct {
+	Command string `json:"command"`
+}
+
+type ImagePullEvent struct {
+	Stage     string  `json:"stage"`
+	Message   string  `json:"message"`
+	Percent   float64 `json:"percent,omitempty"`
+	ImageRef  string  `json:"imageRef,omitempty"`
+	ExitCode  int     `json:"exitCode,omitempty"`
+	UpdatedAt string  `json:"updatedAt"`
+}

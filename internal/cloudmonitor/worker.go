@@ -60,10 +60,13 @@ func checkAll(ctx context.Context) {
 
 	for i := range items {
 		item := items[i]
-		if !isSupportedCloud(item) {
+		if storage.IsNetworkProvider(item.Provider) {
+			checkNetworkStorage(ctx, item)
 			continue
 		}
-		checkGoogleDrive(ctx, item)
+		if isSupportedCloud(item) {
+			checkGoogleDrive(ctx, item)
+		}
 	}
 }
 
@@ -101,4 +104,14 @@ func checkGoogleDrive(ctx context.Context, item storage.Storage) {
 		log.Printf("[CLOUD] google drive usage refreshed id=%s", item.ID)
 	}
 	usageCancel()
+}
+
+func checkNetworkStorage(ctx context.Context, item storage.Storage) {
+	mountCtx, mountCancel := context.WithTimeout(ctx, mountTimeout)
+	if err := storage.RefreshNetworkStorageUsage(mountCtx, &item); err != nil {
+		log.Printf("[CLOUD] refresh network storage failed id=%s provider=%s path=%s err=%v", item.ID, item.Provider, item.MountPath, err)
+	} else {
+		log.Printf("[CLOUD] network storage mount ok id=%s provider=%s path=%s", item.ID, item.Provider, item.MountPath)
+	}
+	mountCancel()
 }

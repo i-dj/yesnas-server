@@ -132,26 +132,53 @@ func (h *Handler) startProducer(ctx context.Context, topic string, interval time
 			return systemmodule.CollectSystemStatus(ctx, interval)
 		})
 	case "system.hardware":
-		go repeat(ctx, events, topic, "HARDWARE_STATUS_FAILED", func() (any, error) {
-			return systemmodule.CollectHardwareSnapshot(ctx, interval)
-		})
+		go produceHardwareSnapshot(ctx, events, topic, interval)
 	case "system.network":
 		go repeat(ctx, events, topic, "NETWORK_INTERFACES_FAILED", func() (any, error) {
 			return systemmodule.CollectNetworkInterfaces(ctx, systemmodule.NetworkRangeRealtime, interval)
 		})
 	case "docker.containers":
-		go repeatWithDelay(ctx, events, topic, "DOCKER_CONTAINERS_LIST_FAILED", interval, func() (any, error) {
-			items, err := dockermodule.ListContainers(ctx)
-			if items == nil {
-				items = []dockermodule.Container{}
-			}
-			return map[string]any{"items": items, "checkedAt": time.Now().UTC()}, err
-		})
+		go produceDockerContainers(ctx, events, topic, interval)
 	case "storage.io":
 		go produceStorageIO(ctx, events, storageID, debug)
 	case "storage.benchmark":
 		go produceBenchmark(ctx, events, poolID, sizeGiB)
 	}
+}
+
+func produceHardwareSnapshot(ctx context.Context, events chan<- outboundEvent, topic string, interval time.Duration) {
+	snapshot, err := systemmodule.CollectHardwareSnapshotBasic(ctx)
+	if err != nil {
+		emit(ctx, events, outboundEvent{"error", httpx.APIError{Code: "HARDWARE_STATUS_FAILED", Message: err.Error()}})
+	} else if !emit(ctx, events, outboundEvent{topic, snapshot}) {
+		return
+	}
+
+	repeat(ctx, events, topic, "HARDWARE_STATUS_FAILED", func() (any, error) {
+		return systemmodule.CollectHardwareSnapshot(ctx, interval)
+	})
+}
+
+func produceDockerContainers(ctx context.Context, events chan<- outboundEvent, topic string, interval time.Duration) {
+	items, err := dockermodule.ListContainersBasic(ctx)
+	if err != nil {
+		emit(ctx, events, outboundEvent{"error", httpx.APIError{Code: "DOCKER_CONTAINERS_LIST_FAILED", Message: err.Error()}})
+	} else {
+		if items == nil {
+			items = []dockermodule.Container{}
+		}
+		if !emit(ctx, events, outboundEvent{topic, map[string]any{"items": items, "checkedAt": time.Now().UTC()}}) {
+			return
+		}
+	}
+
+	repeatWithDelay(ctx, events, topic, "DOCKER_CONTAINERS_LIST_FAILED", interval, func() (any, error) {
+		items, err := dockermodule.ListContainers(ctx)
+		if items == nil {
+			items = []dockermodule.Container{}
+		}
+		return map[string]any{"items": items, "checkedAt": time.Now().UTC()}, err
+	})
 }
 
 func repeat(ctx context.Context, events chan<- outboundEvent, topic, errorCode string, collect func() (any, error)) {

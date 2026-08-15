@@ -250,6 +250,16 @@ func readCPUInfo() (string, int, int, *float64) {
 }
 
 func collectMemoryStatus() MemoryStatus {
+	status := collectMemoryUsageStatus()
+	memoryType, speedMHz, manufacturer, partNumber := readMemoryHardwareInfo()
+	status.Type = memoryType
+	status.SpeedMHz = speedMHz
+	status.Manufacturer = manufacturer
+	status.PartNumber = partNumber
+	return status
+}
+
+func collectMemoryUsageStatus() MemoryStatus {
 	values := readMemInfo()
 	total := values["MemTotal"] * 1024
 	available := values["MemAvailable"] * 1024
@@ -262,17 +272,12 @@ func collectMemoryStatus() MemoryStatus {
 	if pressure == 0 {
 		pressure = usagePercent
 	}
-	memoryType, speedMHz, manufacturer, partNumber := readMemoryHardwareInfo()
 	return MemoryStatus{
 		TotalBytes:      total,
 		UsedBytes:       used,
 		AvailableBytes:  available,
 		UsagePercent:    usagePercent,
 		PressurePercent: round1(pressure),
-		Type:            memoryType,
-		SpeedMHz:        speedMHz,
-		Manufacturer:    manufacturer,
-		PartNumber:      partNumber,
 	}
 }
 

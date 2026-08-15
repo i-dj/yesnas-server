@@ -1,6 +1,7 @@
 ._*
 .DS_Store
 oauth/*.json
+data/transcodes/
 data/*.db
 data/*.db-wal
 data/*.db-shm
